@@ -7,18 +7,9 @@ import type {
   IncrementResponse,
   InitResponse,
   ModOnboardReportResponse,
-  ContentAlignmentPreviewRequest,
-  ContentAlignmentPreviewResponse,
-  ContentReviewRequest,
-  ContentReviewResponse,
-  ModerationActivityPreview,
-  ModerationActivityPreviewResponse,
   ModeratorListResponse,
   NewModConfigResponse,
-  SeedTestActivityRequest,
-  SeedTestActivityResponse,
   ReportHistoryResponse,
-  RuleGapAnalyzeResponse,
   SeniorityRuleResponse,
   SaveSeniorityRuleRequest,
   SeniorOverrideRequest,
@@ -35,15 +26,10 @@ import type {
   SubmitUserActionRequest,
   SubmitUserActionResponse,
 } from '../../shared/api';
-import { fetchModerationActivityPreview, getCurrentSubredditName } from '../core/moderation';
-import { seedTestActivity } from '../core/seed';
-import { generateContentAlignmentPreview } from '../core/wiki-alignment';
-import { generateContentReviewReport } from '../core/content-anchor';
 import { applyMonitoringNotification } from '../core/monitoringNotifications';
 import {
   addNewMod,
   completeNewMod,
-  generateRuleGapReportFromActivity,
   getNewMods,
   getReports,
   getReviewAssignments,
@@ -582,152 +568,6 @@ api.post('/modonboard/reset-data', async (c) => {
     return c.json({ message: 'ModAnchor workspace data cleared.' }, 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to clear ModAnchor workspace data.';
-    return c.json<ApiErrorResponse>({ error: message }, 400);
-  }
-});
-
-api.post('/rulegap/analyze', async (c) => {
-  try {
-    const body = (await c.req.json<{ periodDays?: number; activityPreview?: ModerationActivityPreview; includePlatformActions?: boolean }>()) ?? {};
-    const periodDays = Number.isFinite(body.periodDays) ? Math.max(1, Math.floor(body.periodDays!)) : 7;
-    const includePlatformActions = body.includePlatformActions === true;
-    const subreddit = getSubreddit();
-    const bodyPreview = body.activityPreview;
-    const hasBodyPreview =
-      !!bodyPreview &&
-      ((typeof bodyPreview.totalActions === 'number' && bodyPreview.totalActions > 0) ||
-        (Array.isArray(bodyPreview.recentActions) && bodyPreview.recentActions.length > 0) ||
-        (Array.isArray(bodyPreview.actionSummary) &&
-          bodyPreview.actionSummary.some((a) => typeof a.count === 'number' && a.count > 0)));
-
-    const preview = hasBodyPreview
-      ? bodyPreview
-      : await fetchModerationActivityPreview(context, periodDays, 100, includePlatformActions);
-
-    const hasPreview =
-      !!preview &&
-      ((typeof preview.totalActions === 'number' && preview.totalActions > 0) ||
-        (Array.isArray(preview.recentActions) && preview.recentActions.length > 0) ||
-        (Array.isArray(preview.actionSummary) &&
-          preview.actionSummary.some((a) => typeof a.count === 'number' && a.count > 0)));
-
-    if (!hasPreview) {
-      return c.json<RuleGapAnalyzeResponse>(
-        {
-          report: null,
-          preview,
-          message:
-            'No moderation activity found for this period. Try a longer period or create test moderation actions such as removing or approving a post.',
-        },
-        422
-      );
-    }
-
-    const report = generateRuleGapReportFromActivity(subreddit, periodDays, preview);
-    await saveReport(redis, subreddit, report);
-    return c.json<RuleGapAnalyzeResponse>({
-      report,
-      preview,
-      message: 'RuleGap report generated from recent moderation activity and saved to history.',
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to generate RuleGap report';
-    return c.json<ApiErrorResponse>({ error: message }, 400);
-  }
-});
-
-api.post('/rulegap/activity-preview', async (c) => {
-  const body = (await c.req.json<{ periodDays?: number; limit?: number; includePlatformActions?: boolean }>()) ?? {};
-  const periodDays = body.periodDays === 30 || body.periodDays === 7 ? body.periodDays : 7;
-  const requestedLimit = Number.isFinite(body.limit) ? Math.floor(body.limit!) : 100;
-  const limit = Math.min(Math.max(requestedLimit, 1), 250);
-  const includePlatformActions = body.includePlatformActions === true;
-
-  const subreddit = getCurrentSubredditName(context);
-  if (!subreddit) {
-    return c.json<ApiErrorResponse>(
-      { error: 'Unable to determine subreddit for moderation activity preview.' },
-      400
-    );
-  }
-
-  try {
-    console.log('[modanchor] loading moderation activity preview', { subreddit, periodDays, limit, includePlatformActions });
-    const preview = await fetchModerationActivityPreview(context, periodDays, limit, includePlatformActions);
-    return c.json<ModerationActivityPreviewResponse>({ preview });
-  } catch {
-    return c.json<ApiErrorResponse>(
-      { error: 'Unable to load moderation activity preview. You can still generate a mock RuleGap report.' },
-      500
-    );
-  }
-});
-
-api.post('/dev/seed-test-activity', async (c) => {
-  try {
-    const body = (await c.req.json<SeedTestActivityRequest>()) ?? ({} as SeedTestActivityRequest);
-    if (body.confirmation !== 'SEED') {
-      return c.json<ApiErrorResponse>({ error: 'confirmation must be SEED' }, 400);
-    }
-
-    const subreddit = getSubreddit();
-    const subredditLower = subreddit.toLowerCase();
-    const isDevSubreddit = subredditLower.includes('dev') || subredditLower.endsWith('_dev');
-    if (!isDevSubreddit) {
-      return c.json<ApiErrorResponse>(
-        { error: 'Seeding is only allowed in dev/playtest subreddits.' },
-        403
-      );
-    }
-
-    if (!body.scenario) {
-      return c.json<ApiErrorResponse>({ error: 'scenario is required' }, 400);
-    }
-
-    const requestedCount = Number.isFinite(body.count) ? Math.floor(body.count ?? 3) : 3;
-    const count = Math.min(Math.max(requestedCount, 1), 10);
-
-    const result = await seedTestActivity(context, {
-      subreddit,
-      scenario: body.scenario,
-      count,
-    });
-    return c.json<SeedTestActivityResponse>(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to seed test activity.';
-    return c.json<ApiErrorResponse>({ error: message }, 400);
-  }
-});
-
-api.post('/wiki-anchor/content-alignment-preview', async (c) => {
-  try {
-    const body = (await c.req.json<ContentAlignmentPreviewRequest>()) ?? {};
-    const preview = generateContentAlignmentPreview({
-      wikiText: body.wikiText,
-      useMockWiki: body.useMockWiki,
-      useMockPosts: body.useMockPosts,
-      sampleSize: body.sampleSize,
-    });
-    return c.json<ContentAlignmentPreviewResponse>(preview);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to generate content alignment preview.';
-    return c.json<ApiErrorResponse>({ error: message }, 400);
-  }
-});
-
-api.post('/content-anchor/review', async (c) => {
-  try {
-    const body = (await c.req.json<ContentReviewRequest>()) ?? {};
-    const report = generateContentReviewReport({
-      standardsText: body.standardsText,
-      reviewRecentPosts: body.reviewRecentPosts,
-      includeRemovedPosts: body.includeRemovedPosts,
-      useMockData: body.useMockData,
-      sampleSize: body.sampleSize,
-    });
-    return c.json<ContentReviewResponse>(report);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to generate content review.';
     return c.json<ApiErrorResponse>({ error: message }, 400);
   }
 });

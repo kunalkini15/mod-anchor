@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import type { UiResponse } from '@devvit/web/shared';
 import { context, redis, reddit } from '@devvit/web/server';
-import { createPost } from '../core/post';
+import { createPost, protectWorkspacePost } from '../core/post';
 
 export const menu = new Hono();
 const workspacePostKey = (subreddit: string): string => `modanchor:workspacePostId:${subreddit.toLowerCase()}`;
@@ -137,6 +137,7 @@ const handleOpenWorkspace = async (c: Context) => {
       try {
         const workspacePost = await reddit.getPostById(workspacePostId as `t3_${string}`);
         if ((workspacePost?.url || workspacePost?.permalink) && isWorkspacePostForSubreddit(workspacePost, subreddit)) {
+          await protectWorkspacePost(workspacePost);
           return workspacePost;
         }
         await redis.del(key);
@@ -184,15 +185,6 @@ const handleOpenWorkspace = async (c: Context) => {
 menu.post('/open-modanchor-workspace', handleOpenWorkspace);
 // Backward-compatible route for existing installs still pointing at old endpoint.
 menu.post('/open-modanchor', handleOpenWorkspace);
-
-menu.post('/rulegap-report', async (c) => {
-  return c.json<UiResponse>(
-    {
-      showToast: 'Open ModAnchor and use Wiki Anchor to generate a report.',
-    },
-    200
-  );
-});
 
 menu.post('/modanchor-post-action', async (c) => {
   if (!(await isCurrentUserModerator())) {
