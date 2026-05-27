@@ -58,6 +58,7 @@ const normalizeStrongPermissionList = (values: string[] | undefined): string[] =
 type RedisLike = {
   get: (key: string) => Promise<string | undefined>;
   set: (key: string, value: string) => Promise<unknown>;
+  del?: (key: string) => Promise<unknown>;
 };
 
 const safeParse = <T>(value: string | undefined | null, fallback: T): T => {
@@ -71,6 +72,256 @@ const safeParse = <T>(value: string | undefined | null, fallback: T): T => {
 
 const toUtcDateKey = (iso: string): string => new Date(iso).toISOString().slice(0, 10);
 const actionTs = (review: ModAnchorActionReview): string => review.executedAt ?? review.decidedAt ?? review.createdAt;
+
+const ACTION_V2_CREATED_INDEX_CAP = 2000;
+const ACTION_V2_STATUS_INDEX_CAP = 1000;
+const ACTION_V2_ACTOR_INDEX_CAP = 1000;
+const ACTION_V2_ACTOR_SET_CAP = 500;
+const ACTION_V2_MIGRATION_MARKER_KEY = (subreddit: string) =>
+  `modanchor:${subreddit}:migration:v2:actionReviews`;
+const actionV2RecordKey = (subreddit: string, actionId: string) =>
+  `modanchor:${subreddit}:action:v2:${actionId}`;
+const actionV2CreatedIndexKey = (subreddit: string) =>
+  `modanchor:${subreddit}:actions:v2:index:created`;
+const actionV2StatusIndexKey = (subreddit: string, status: ModAnchorActionExecutionStatus) =>
+  `modanchor:${subreddit}:actions:v2:index:status:${status}`;
+const actionV2ActorIndexKey = (subreddit: string, actor: string) =>
+  `modanchor:${subreddit}:actions:v2:index:actor:${normalizeUsername(actor)}`;
+const actionV2ActorsIndexKey = (subreddit: string) =>
+  `modanchor:${subreddit}:actions:v2:index:actors`;
+const actionReviewSortScore = (review: ModAnchorActionReview): number => {
+  const ts = Date.parse(actionTs(review));
+  if (Number.isFinite(ts)) return ts;
+  return Date.parse(review.createdAt) || 0;
+};
+const upsertIndexNewestFirst = (ids: string[], id: string, cap: number): string[] =>
+  [id, ...ids.filter((entry) => entry !== id)].slice(0, cap);
+const removeFromIndex = (ids: string[], id: string): string[] => ids.filter((entry) => entry !== id);
+const getActionV2Index = async (
+  redisClient: Pick<RedisLike, 'get'>,
+  key: string
+): Promise<string[]> => safeParse<string[]>(await redisClient.get(key), []);
+const setActionV2Index = async (
+  redisClient: Pick<RedisLike, 'set'>,
+  key: string,
+  ids: string[]
+): Promise<void> => {
+  await redisClient.set(key, JSON.stringify(ids));
+};
+const touchActionV2MigrationMarker = async (
+  redisClient: Pick<RedisLike, 'set'>,
+  subreddit: string
+): Promise<void> => {
+  await redisClient.set(
+    ACTION_V2_MIGRATION_MARKER_KEY(subreddit),
+    JSON.stringify({
+      enabled: true,
+      mode: 'dual-read-write-new',
+      updatedAt: nowIso(),
+    })
+  );
+};
+const addToActorMetaIndex = async (
+  redisClient: RedisLike,
+  subreddit: string,
+  actor: string
+): Promise<void> => {
+  const key = actionV2ActorsIndexKey(subreddit);
+  const existing = await getActionV2Index(redisClient, key);
+  const normalized = normalizeUsername(actor);
+  const updated = upsertIndexNewestFirst(existing, normalized, ACTION_V2_ACTOR_SET_CAP);
+  await setActionV2Index(redisClient, key, updated);
+};
+const createModAnchorActionReviewV2 = async (
+  redisClient: RedisLike,
+  subreddit: string,
+  review: ModAnchorActionReview
+): Promise<void> => {
+  await redisClient.set(actionV2RecordKey(subreddit, review.id), JSON.stringify(review));
+  await Promise.all([
+    (async () => {
+      const key = actionV2CreatedIndexKey(subreddit);
+      const existing = await getActionV2Index(redisClient, key);
+      await setActionV2Index(redisClient, key, upsertIndexNewestFirst(existing, review.id, ACTION_V2_CREATED_INDEX_CAP));
+    })(),
+    (async () => {
+      const key = actionV2StatusIndexKey(subreddit, review.executionStatus);
+      const existing = await getActionV2Index(redisClient, key);
+      await setActionV2Index(redisClient, key, upsertIndexNewestFirst(existing, review.id, ACTION_V2_STATUS_INDEX_CAP));
+    })(),
+    (async () => {
+      const key = actionV2ActorIndexKey(subreddit, review.actorUsername);
+      const existing = await getActionV2Index(redisClient, key);
+      await setActionV2Index(redisClient, key, upsertIndexNewestFirst(existing, review.id, ACTION_V2_ACTOR_INDEX_CAP));
+    })(),
+    addToActorMetaIndex(redisClient, subreddit, review.actorUsername),
+    touchActionV2MigrationMarker(redisClient, subreddit),
+  ]);
+};
+const getModAnchorActionReviewByIdV2 = async (
+  redisClient: Pick<RedisLike, 'get'>,
+  subreddit: string,
+  actionId: string
+): Promise<ModAnchorActionReview | null> =>
+  safeParse<ModAnchorActionReview | null>(await redisClient.get(actionV2RecordKey(subreddit, actionId)), null);
+const updateModAnchorActionReviewStatusV2 = async (
+  redisClient: RedisLike,
+  subreddit: string,
+  actionReviewId: string,
+  status: ModAnchorActionExecutionStatus,
+  decidedBy?: string,
+  error?: string,
+  metadataPatch?: Record<string, unknown>
+): Promise<ModAnchorActionReview | null> => {
+  const existing = await getModAnchorActionReviewByIdV2(redisClient, subreddit, actionReviewId);
+  if (!existing) return null;
+  const now = nowIso();
+  const updated: ModAnchorActionReview = {
+    ...existing,
+    executionStatus: status,
+    decidedBy: decidedBy ?? existing.decidedBy,
+    decidedAt: decidedBy ? now : existing.decidedAt,
+    executedAt:
+      status === 'approved_executed' || status === 'executed_monitored' || status === 'executed'
+        ? now
+        : existing.executedAt,
+    error: error ?? existing.error,
+    metadata: metadataPatch ? { ...(existing.metadata ?? {}), ...metadataPatch } : existing.metadata,
+  };
+  await redisClient.set(actionV2RecordKey(subreddit, actionReviewId), JSON.stringify(updated));
+  if (existing.executionStatus !== status) {
+    const prevStatusKey = actionV2StatusIndexKey(subreddit, existing.executionStatus);
+    const nextStatusKey = actionV2StatusIndexKey(subreddit, status);
+    const [prevIds, nextIds] = await Promise.all([
+      getActionV2Index(redisClient, prevStatusKey),
+      getActionV2Index(redisClient, nextStatusKey),
+    ]);
+    await Promise.all([
+      setActionV2Index(redisClient, prevStatusKey, removeFromIndex(prevIds, actionReviewId)),
+      setActionV2Index(
+        redisClient,
+        nextStatusKey,
+        upsertIndexNewestFirst(nextIds, actionReviewId, ACTION_V2_STATUS_INDEX_CAP)
+      ),
+    ]);
+  }
+  return updated;
+};
+const getModAnchorActionReviewsV2 = async (
+  redisClient: Pick<RedisLike, 'get'>,
+  subreddit: string
+): Promise<ModAnchorActionReview[]> => {
+  const ids = await getActionV2Index(redisClient, actionV2CreatedIndexKey(subreddit));
+  if (ids.length === 0) return [];
+  const records = await Promise.all(ids.map((id) => getModAnchorActionReviewByIdV2(redisClient, subreddit, id)));
+  return records.filter((entry): entry is ModAnchorActionReview => Boolean(entry));
+};
+const getLegacyModAnchorActionReviews = async (
+  redisClient: Pick<RedisLike, 'get'>,
+  subreddit: string
+): Promise<ModAnchorActionReview[]> =>
+  safeParse<ModAnchorActionReview[]>(await redisClient.get(modActionReviewsKey(subreddit)), []);
+const getMergedModAnchorActionReviews = async (
+  redisClient: Pick<RedisLike, 'get'>,
+  subreddit: string
+): Promise<ModAnchorActionReview[]> => {
+  const [v2, legacy] = await Promise.all([
+    getModAnchorActionReviewsV2(redisClient, subreddit),
+    getLegacyModAnchorActionReviews(redisClient, subreddit),
+  ]);
+  const dedup = new Map<string, ModAnchorActionReview>();
+  for (const review of [...v2, ...legacy]) {
+    if (!review?.id) continue;
+    if (!dedup.has(review.id)) dedup.set(review.id, review);
+  }
+  return [...dedup.values()].sort((a, b) => {
+    const delta = actionReviewSortScore(b) - actionReviewSortScore(a);
+    if (delta !== 0) return delta;
+    return b.id.localeCompare(a.id);
+  });
+};
+
+type ActionReviewPageOptions = {
+  status?: string;
+  actor?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  cursor?: string;
+};
+
+const parsePageLimit = (raw: number | undefined, fallback = 25, max = 100): number => {
+  const value = Number.isFinite(raw) ? Number(raw) : fallback;
+  return Math.min(max, Math.max(1, Math.floor(value)));
+};
+
+const parsePageOffset = (raw: string | undefined): number => {
+  const parsed = Number(raw ?? '0');
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+};
+
+export const getModAnchorActionReviewsPage = async (
+  redisClient: Pick<RedisLike, 'get'>,
+  subreddit: string,
+  options: ActionReviewPageOptions
+): Promise<{ items: ModAnchorActionReview[]; nextCursor: string | null; hasMore: boolean; total: number }> => {
+  const limit = parsePageLimit(options.limit, 25, 100);
+  const offset = parsePageOffset(options.cursor);
+  const normalizedActor = options.actor ? normalizeUsername(options.actor).toLowerCase() : '';
+  const status = options.status?.trim();
+  const fromMs = options.dateFrom ? new Date(options.dateFrom).getTime() : Number.NEGATIVE_INFINITY;
+  const toMs = options.dateTo ? new Date(options.dateTo).getTime() : Number.POSITIVE_INFINITY;
+
+  const selectedIndexKey = status
+    ? actionV2StatusIndexKey(subreddit, status as ModAnchorActionExecutionStatus)
+    : normalizedActor
+      ? actionV2ActorIndexKey(subreddit, normalizedActor)
+      : actionV2CreatedIndexKey(subreddit);
+
+  const v2Ids = await getActionV2Index(redisClient, selectedIndexKey);
+  const v2Records = await Promise.all(v2Ids.map((id) => getModAnchorActionReviewByIdV2(redisClient, subreddit, id)));
+  const filteredV2 = v2Records
+    .filter((entry): entry is ModAnchorActionReview => Boolean(entry))
+    .filter((review) => !status || review.executionStatus === status)
+    .filter(
+      (review) =>
+        !normalizedActor || normalizeUsername(review.actorUsername).toLowerCase() === normalizedActor
+    )
+    .filter((review) => {
+      const t = actionReviewSortScore(review);
+      return t >= fromMs && t <= toMs;
+    });
+
+  const legacy = (await getLegacyModAnchorActionReviews(redisClient, subreddit))
+    .filter((review) => !status || review.executionStatus === status)
+    .filter(
+      (review) =>
+        !normalizedActor || normalizeUsername(review.actorUsername).toLowerCase() === normalizedActor
+    )
+    .filter((review) => {
+      const t = actionReviewSortScore(review);
+      return t >= fromMs && t <= toMs;
+    });
+
+  const mergedById = new Map<string, ModAnchorActionReview>();
+  for (const review of [...filteredV2, ...legacy]) {
+    if (!review?.id || mergedById.has(review.id)) continue;
+    mergedById.set(review.id, review);
+  }
+  const merged = [...mergedById.values()].sort((a, b) => {
+    const delta = actionReviewSortScore(b) - actionReviewSortScore(a);
+    if (delta !== 0) return delta;
+    return b.id.localeCompare(a.id);
+  });
+  const items = merged.slice(offset, offset + limit);
+  const nextOffset = offset + items.length;
+  return {
+    items,
+    nextCursor: nextOffset < merged.length ? String(nextOffset) : null,
+    hasMore: nextOffset < merged.length,
+    total: merged.length,
+  };
+};
 
 export const normalizeStoredReports = (
   reports: StoredReport[],
@@ -954,18 +1205,15 @@ export const updateReviewAssignmentSetup = async (
 export const getModAnchorActionReviews = async (
   redisClient: Pick<RedisLike, 'get'>,
   subreddit: string
-): Promise<ModAnchorActionReview[]> =>
-  safeParse<ModAnchorActionReview[]>(await redisClient.get(modActionReviewsKey(subreddit)), []);
+): Promise<ModAnchorActionReview[]> => getMergedModAnchorActionReviews(redisClient, subreddit);
 
 export const createPendingModAnchorActionReview = async (
   redisClient: RedisLike,
   subreddit: string,
   review: ModAnchorActionReview
 ): Promise<ModAnchorActionReview[]> => {
-  const existing = await getModAnchorActionReviews(redisClient, subreddit);
-  const updated = [review, ...existing].slice(0, 200);
-  await redisClient.set(modActionReviewsKey(subreddit), JSON.stringify(updated));
-  return updated;
+  await createModAnchorActionReviewV2(redisClient, subreddit, review);
+  return getMergedModAnchorActionReviews(redisClient, subreddit);
 };
 
 export const updateModAnchorActionReviewStatus = async (
@@ -977,26 +1225,41 @@ export const updateModAnchorActionReviewStatus = async (
   error?: string,
   metadataPatch?: Record<string, unknown>
 ): Promise<ModAnchorActionReview[]> => {
-  const existing = await getModAnchorActionReviews(redisClient, subreddit);
-  const now = nowIso();
-  const updated = existing.map((item) =>
-    item.id === actionReviewId
-      ? {
-          ...item,
-          executionStatus: status,
-          decidedBy: decidedBy ?? item.decidedBy,
-          decidedAt: decidedBy ? now : item.decidedAt,
-          executedAt:
-            status === 'approved_executed' || status === 'executed_monitored' || status === 'executed'
-              ? now
-              : item.executedAt,
-          error: error ?? item.error,
-          metadata: metadataPatch ? { ...(item.metadata ?? {}), ...metadataPatch } : item.metadata,
-        }
-      : item
+  const updatedV2 = await updateModAnchorActionReviewStatusV2(
+    redisClient,
+    subreddit,
+    actionReviewId,
+    status,
+    decidedBy,
+    error,
+    metadataPatch
   );
-  await redisClient.set(modActionReviewsKey(subreddit), JSON.stringify(updated));
-  return updated;
+  if (updatedV2) {
+    return getMergedModAnchorActionReviews(redisClient, subreddit);
+  }
+  const existingLegacy = await getLegacyModAnchorActionReviews(redisClient, subreddit);
+  const now = nowIso();
+  let matchedLegacy = false;
+  const updatedLegacy = existingLegacy.map((item) => {
+    if (item.id !== actionReviewId) return item;
+    matchedLegacy = true;
+    return {
+      ...item,
+      executionStatus: status,
+      decidedBy: decidedBy ?? item.decidedBy,
+      decidedAt: decidedBy ? now : item.decidedAt,
+      executedAt:
+        status === 'approved_executed' || status === 'executed_monitored' || status === 'executed'
+          ? now
+          : item.executedAt,
+      error: error ?? item.error,
+      metadata: metadataPatch ? { ...(item.metadata ?? {}), ...metadataPatch } : item.metadata,
+    };
+  });
+  if (matchedLegacy) {
+    await redisClient.set(modActionReviewsKey(subreddit), JSON.stringify(updatedLegacy));
+  }
+  return getMergedModAnchorActionReviews(redisClient, subreddit);
 };
 
 export const getMonitoringDigests = async (
@@ -1015,9 +1278,39 @@ export const saveMonitoringDigests = async (
 };
 
 export const resetModAnchorWorkspaceData = async (
-  redisClient: Pick<RedisLike, 'set'>,
+  redisClient: Pick<RedisLike, 'set' | 'get'> & Partial<Pick<RedisLike, 'del'>>,
   subreddit: string
 ): Promise<void> => {
+  const createdActionIds = await getActionV2Index(redisClient, actionV2CreatedIndexKey(subreddit));
+  const knownStatuses: ModAnchorActionExecutionStatus[] = [
+    'pending_approval',
+    'approved_executed',
+    'rejected',
+    'executed_monitored',
+    'executed',
+    'failed',
+  ];
+  const knownActors = await getActionV2Index(redisClient, actionV2ActorsIndexKey(subreddit));
+  const keysToReset: string[] = [
+    actionV2CreatedIndexKey(subreddit),
+    actionV2ActorsIndexKey(subreddit),
+    ACTION_V2_MIGRATION_MARKER_KEY(subreddit),
+    ...knownStatuses.map((status) => actionV2StatusIndexKey(subreddit, status)),
+    ...knownActors.map((actor) => actionV2ActorIndexKey(subreddit, actor)),
+  ];
+  if (redisClient.del) {
+    await Promise.all(
+      [...createdActionIds.map((id) => actionV2RecordKey(subreddit, id)), ...keysToReset].map((key) =>
+        redisClient.del!(key)
+      )
+    );
+  } else {
+    await Promise.all(
+      [...createdActionIds.map((id) => actionV2RecordKey(subreddit, id)), ...keysToReset].map((key) =>
+        redisClient.set(key, JSON.stringify([]))
+      )
+    );
+  }
   await Promise.all([
     redisClient.set(reportsKey(subreddit), JSON.stringify([])),
     redisClient.set(newModsKey(subreddit), JSON.stringify([])),

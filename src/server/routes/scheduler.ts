@@ -26,11 +26,28 @@ scheduler.post('/modanchor-daily-digest', async (c) => {
       subreddit,
       nowUtc: nowUtc.toISOString(),
       digestDateUtc,
+      processedActors: result.processedActors,
+      skippedAlreadySent: result.skippedAlreadySent,
+      truncated: result.truncated,
+      scannedActions: result.scannedActions,
       generated: result.generated,
       sent: result.sent,
       failed: result.failed,
     });
-    return c.json({ status: 'ok', digestDateUtc, generated: result.generated, sent: result.sent, failed: result.failed });
+    return c.json({
+      ok: true,
+      status: 'ok',
+      date: digestDateUtc,
+      digestDateUtc,
+      processedActors: result.processedActors,
+      skippedAlreadySent: result.skippedAlreadySent,
+      truncated: result.truncated,
+      scannedActions: result.scannedActions,
+      generated: result.generated,
+      sent: result.sent,
+      failed: result.failed,
+      message: 'Daily digest scheduler run completed.',
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to run scheduled daily digest';
     console.error('[modanchor scheduler] daily digest run failed', {

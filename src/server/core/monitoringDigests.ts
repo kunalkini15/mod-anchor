@@ -3,6 +3,10 @@ import type { ModAnchorActionReview, ModAnchorMonitoringDigest } from '../../sha
 
 const toUtcDateKey = (date: Date): string => date.toISOString().slice(0, 10);
 const toDigestDateFromIso = (iso: string): string => new Date(iso).toISOString().slice(0, 10);
+const MAX_DIGEST_ACTORS_PER_RUN = 50;
+const MAX_DIGEST_ACTIONS_SCANNED = 1000;
+const MAX_ACTIONS_PER_DIGEST_DETAIL = 50;
+const MAX_DIGEST_BODY_CHARS = 9000;
 
 export const getPreviousUtcDateKey = (now: Date): string => {
   const previous = new Date(now);
@@ -24,10 +28,17 @@ export const generateMonitoringDigestsForDate = async (input: {
   generated: number;
   sent: number;
   failed: number;
+  skippedAlreadySent: number;
+  processedActors: number;
+  truncated: boolean;
+  scannedActions: number;
 }> => {
   const { subreddit, digestDateUtc, sendModmail, reviews, existingDigests } = input;
   const actorGroups = new Map<string, ModAnchorActionReview[]>();
+  let scannedActions = 0;
   for (const review of reviews) {
+    if (scannedActions >= MAX_DIGEST_ACTIONS_SCANNED) break;
+    scannedActions += 1;
     if (review.executionStatus !== 'executed_monitored') continue;
     if ((review.reportMode ?? 'per_action') !== 'daily_digest') continue;
     if ((review.modmailDeliveryStatus ?? 'pending') === 'sent') continue;
@@ -43,14 +54,29 @@ export const generateMonitoringDigestsForDate = async (input: {
   let generated = 0;
   let sent = 0;
   let failed = 0;
+  let skippedAlreadySent = 0;
+  let processedActors = 0;
+  let truncated = scannedActions >= MAX_DIGEST_ACTIONS_SCANNED;
   const nowIso = new Date().toISOString();
-  for (const [actorKey, actorReviews] of actorGroups.entries()) {
+  const actorEntries = [...actorGroups.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, MAX_DIGEST_ACTORS_PER_RUN);
+  if (actorGroups.size > actorEntries.length) truncated = true;
+  for (const [actorKey, actorReviewsRaw] of actorEntries) {
+    processedActors += 1;
     const digestId = `${subreddit}:${actorKey}:${digestDateUtc}`;
     const existingIndex = updated.findIndex((digest) => digest.id === digestId);
     const existing = existingIndex >= 0 ? updated[existingIndex] : undefined;
-    if (existing?.deliveryStatus === 'sent') continue;
+    if (existing?.deliveryStatus === 'sent') {
+      skippedAlreadySent += 1;
+      continue;
+    }
+    const actorReviews = [...new Map(actorReviewsRaw.map((item) => [item.id, item])).values()]
+      .sort((a, b) => new Date(b.executedAt ?? b.createdAt).getTime() - new Date(a.executedAt ?? a.createdAt).getTime());
     const actionCounts: Record<string, number> = {};
     for (const item of actorReviews) actionCounts[item.actionType] = (actionCounts[item.actionType] ?? 0) + 1;
+    const detailItems = actorReviews.slice(0, MAX_ACTIONS_PER_DIGEST_DETAIL);
+    const truncatedDetail = actorReviews.length > detailItems.length;
     const digest: ModAnchorMonitoringDigest = {
       id: digestId,
       subreddit,
@@ -73,10 +99,18 @@ export const generateMonitoringDigestsForDate = async (input: {
     if (sendModmail) {
       try {
         const lines = Object.entries(actionCounts).map(([action, count]) => `- ${action}: ${count}`).join('\n');
+        const actionDetailLines = detailItems
+          .map((item) => `- ${new Date(item.executedAt ?? item.createdAt).toISOString()} · ${item.actionType} · ${item.targetType}:${item.targetId ?? 'n/a'}`)
+          .join('\n');
+        let body = `ModAnchor daily monitoring digest (UTC)\n\nModerator: u/${actorKey}\nDate: ${digestDateUtc} UTC\nTotal monitored actions: ${actorReviews.length}\n\nAction breakdown:\n${lines}\n\nRecent action details (latest ${detailItems.length}${truncatedDetail ? ` of ${actorReviews.length}` : ''}):\n${actionDetailLines}\n${truncatedDetail ? `\nDigest truncated: showing latest ${detailItems.length} of ${actorReviews.length} monitored actions.` : ''}\n\nThis digest includes ModAnchor actions performed during Monitoring phase.`;
+        if (body.length > MAX_DIGEST_BODY_CHARS) {
+          body = `ModAnchor daily monitoring digest (UTC)\n\nModerator: u/${actorKey}\nDate: ${digestDateUtc} UTC\nTotal monitored actions: ${actorReviews.length}\n\nAction breakdown:\n${lines}\n\nDigest truncated for size limits.`;
+          truncated = true;
+        }
         await reddit.modMail.createConversation({
           subredditName: subreddit,
           subject: `ModAnchor daily digest: u/${actorKey} — ${digestDateUtc} UTC`,
-          body: `ModAnchor daily monitoring digest (UTC)\n\nModerator: u/${actorKey}\nDate: ${digestDateUtc} UTC\nTotal monitored actions: ${actorReviews.length}\n\nAction breakdown:\n${lines}\n\nThis digest includes ModAnchor actions performed during Monitoring phase.`,
+          body,
           to: null,
           isAuthorHidden: true,
         });
@@ -93,6 +127,5 @@ export const generateMonitoringDigestsForDate = async (input: {
     if (existingIndex >= 0) updated[existingIndex] = digest;
     else updated.push(digest);
   }
-  return { digests: updated, generated, sent, failed };
+  return { digests: updated, generated, sent, failed, skippedAlreadySent, processedActors, truncated, scannedActions };
 };
-

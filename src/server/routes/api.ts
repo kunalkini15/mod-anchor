@@ -21,10 +21,14 @@ import type {
   SaveSeniorAccessPolicyRequest,
   ModAnchorActionReviewsResponse,
   MonitoringDigestsResponse,
+  PaginatedMonitoringDigestsResponse,
   ModAnchorActionType,
   MyActionReviewsResponse,
   SubmitUserActionRequest,
   SubmitUserActionResponse,
+  PaginatedModAnchorActionReviewsResponse,
+  PaginatedReportHistoryResponse,
+  ReportHistoryListItem,
 } from '../../shared/api';
 import { applyMonitoringNotification } from '../core/monitoringNotifications';
 import {
@@ -52,6 +56,7 @@ import {
   updateReviewAssignmentSetup,
   createPendingModAnchorActionReview,
   getModAnchorActionReviews,
+  getModAnchorActionReviewsPage,
   getMonitoringDigests,
   saveMonitoringDigests,
   updateModAnchorActionReviewStatus,
@@ -112,6 +117,19 @@ const hasStrongRedditPermission = (permissions: string[], strong: string[]) => {
   );
 };
 const toDigestDate = (iso: string) => new Date(iso).toISOString().slice(0, 10);
+const parseLimit = (raw: string | undefined, fallback = 25, max = 100) => {
+  const value = raw ? Number(raw) : fallback;
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(1, Math.floor(value)));
+};
+const parseOffsetCursor = (raw: string | undefined): number => {
+  if (!raw) return 0;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.floor(parsed));
+};
+const MAX_REASON_LENGTH = 1000;
+const MAX_MOD_NOTE_LENGTH = 500;
 const formatActionLabel = (actionType: string) => {
   const labels: Record<string, string> = {
     remove_post: 'Removed post',
@@ -125,7 +143,10 @@ const formatActionLabel = (actionType: string) => {
     lock_comment: 'Locked comment',
     unlock_comment: 'Unlocked comment',
     ban_user: 'Ban user',
+    temp_ban_user: 'Temporary ban user',
     unban_user: 'Unban user',
+    mute_user: 'Mute user',
+    unmute_user: 'Unmute user',
     add_mod_note: 'Add mod note',
   };
   return labels[actionType] ?? actionType.replaceAll('_', ' ');
@@ -289,6 +310,30 @@ const executeReviewAction = async (review: {
       },
     };
   }
+  if (actionType === 'temp_ban_user') {
+    const targetUsername = String((review.metadata?.targetUsername ?? targetId) ?? '').replace(/^\/?u\//i, '').trim();
+    if (!targetUsername) throw new Error('Target username is missing');
+    const requestedDuration = Number(review.metadata?.durationDays ?? 0);
+    const allowedDurations = new Set([3, 7, 28]);
+    const duration = allowedDurations.has(requestedDuration) ? requestedDuration : 7;
+    const executionAttemptedAt = new Date().toISOString();
+    await reddit.banUser({
+      subredditName: getSubreddit(),
+      username: targetUsername,
+      note: typeof review.reason === 'string' ? review.reason : undefined,
+      duration,
+    } as unknown as Parameters<typeof reddit.banUser>[0]);
+    return {
+      metadata: {
+        executionAttemptedAt,
+        executionStatusDetail: 'temp_ban_user call succeeded',
+        redditApiCallStatus: 'succeeded',
+        verificationStatus: 'skipped',
+        verificationSource: 'none',
+        durationDays: duration,
+      },
+    };
+  }
   if (actionType === 'unban_user') {
     const targetUsername = String((review.metadata?.targetUsername ?? targetId) ?? '').replace(/^\/?u\//i, '').trim();
     if (!targetUsername) throw new Error('Target username is missing');
@@ -298,6 +343,40 @@ const executeReviewAction = async (review: {
       metadata: {
         executionAttemptedAt,
         executionStatusDetail: 'unban_user call succeeded',
+        redditApiCallStatus: 'succeeded',
+        verificationStatus: 'skipped',
+        verificationSource: 'none',
+      },
+    };
+  }
+  if (actionType === 'mute_user') {
+    const targetUsername = String((review.metadata?.targetUsername ?? targetId) ?? '').replace(/^\/?u\//i, '').trim();
+    if (!targetUsername) throw new Error('Target username is missing');
+    const executionAttemptedAt = new Date().toISOString();
+    await reddit.muteUser({
+      subredditName: getSubreddit(),
+      username: targetUsername,
+      note: typeof review.reason === 'string' ? review.reason : undefined,
+    } as Parameters<typeof reddit.muteUser>[0]);
+    return {
+      metadata: {
+        executionAttemptedAt,
+        executionStatusDetail: 'mute_user call succeeded',
+        redditApiCallStatus: 'succeeded',
+        verificationStatus: 'skipped',
+        verificationSource: 'none',
+      },
+    };
+  }
+  if (actionType === 'unmute_user') {
+    const targetUsername = String((review.metadata?.targetUsername ?? targetId) ?? '').replace(/^\/?u\//i, '').trim();
+    if (!targetUsername) throw new Error('Target username is missing');
+    const executionAttemptedAt = new Date().toISOString();
+    await reddit.unmuteUser(targetUsername, getSubreddit());
+    return {
+      metadata: {
+        executionAttemptedAt,
+        executionStatusDetail: 'unmute_user call succeeded',
         redditApiCallStatus: 'succeeded',
         verificationStatus: 'skipped',
         verificationSource: 'none',
@@ -425,6 +504,10 @@ const getModOnboardAccess = async (): Promise<ModOnboardAccessResponse> => {
   const isUnderReview = activeAssignments.some(
     (a) => normalizeUsername(a.username).toLowerCase() === currentUsername
   );
+  const hasCompletedReview = reviewAssignments.some((assignment) => {
+    if (normalizeUsername(assignment.username).toLowerCase() !== currentUsername) return false;
+    return assignment.status === 'completed' || assignment.phase === 'graduated';
+  });
   const isSeniorByOverride = seniorOverrides.some(
     (entry) => normalizeUsername(entry.username).toLowerCase() === currentUsername
   );
@@ -437,7 +520,8 @@ const getModOnboardAccess = async (): Promise<ModOnboardAccessResponse> => {
     activeAssignments.length === 0 &&
     hasStrongRedditPermission(redditPermissions, policy.strongRedditPermissions);
   // TODO: Harden bootstrap access with Reddit owner/full-permission checks once Devvit exposes a reliable field here.
-  const isSeniorMod = isSeniorByOverride || isSeniorByRedditPermissions || isBootstrapAllowed;
+  const isSeniorMod =
+    hasCompletedReview || isSeniorByOverride || isSeniorByRedditPermissions || isBootstrapAllowed;
   const isModerator = redditPermissions.length > 0;
   const canUseActionConsole = isModerator;
   const allowed = isModerator;
@@ -512,10 +596,58 @@ api.post('/decrement', async (c) => {
 api.get('/reports', async (c) => {
   try {
     const reports = await getReports(redis, getSubreddit());
-    return c.json<ReportHistoryResponse>({ reports });
+    const summaryOnly = String(c.req.query('summaryOnly') ?? '').toLowerCase() === 'true';
+    if (!summaryOnly) {
+      return c.json<ReportHistoryResponse>({ reports });
+    }
+    const limit = parseLimit(c.req.query('limit'), 20, 100);
+    const offset = parseOffsetCursor(c.req.query('cursor'));
+    const items: ReportHistoryListItem[] = reports.map((report) => ({
+      id: report.id,
+      type: report.type,
+      title: report.type === 'modonboard'
+        ? report.summary
+        : `RuleGap report — ${toDigestDate(report.generatedAt)} UTC`,
+      username: report.type === 'modonboard' ? report.username : undefined,
+      generatedAt: report.generatedAt,
+      periodDays: report.periodDays,
+      actionCount: report.type === 'modonboard' ? report.metrics?.totalActions : undefined,
+      metrics:
+        report.type === 'modonboard'
+          ? {
+              totalActions: report.metrics?.totalActions,
+              approvedExecuted: report.metrics?.approvedExecuted,
+              executedMonitored: report.metrics?.executedMonitored,
+              rejected: report.metrics?.rejected,
+              failed: report.metrics?.failed,
+            }
+          : undefined,
+      focusAreasCount: report.type === 'modonboard' ? report.focusAreas?.length : undefined,
+    }));
+    const paged = items.slice(offset, offset + limit);
+    const nextOffset = offset + paged.length;
+    return c.json<PaginatedReportHistoryResponse>({
+      items: paged,
+      nextCursor: nextOffset < items.length ? String(nextOffset) : null,
+      hasMore: nextOffset < items.length,
+      total: items.length,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load report history';
     return c.json<ApiErrorResponse>({ error: message }, 400);
+  }
+});
+
+api.get('/reports/:id', async (c) => {
+  try {
+    const id = String(c.req.param('id') ?? '').trim();
+    if (!id) return c.json<ApiErrorResponse>({ error: 'id is required' }, 400);
+    const reports = await getReports(redis, getSubreddit());
+    const report = reports.find((item) => item.id === id);
+    if (!report) return c.json<ApiErrorResponse>({ error: 'Report not found.' }, 404);
+    return c.json({ report });
+  } catch (error) {
+    return c.json<ApiErrorResponse>({ error: error instanceof Error ? error.message : 'Failed to load report' }, 400);
   }
 });
 
@@ -1172,8 +1304,36 @@ api.get('/modonboard/action-reviews', async (c) => {
     );
   }
   try {
-    const reviews = await getModAnchorActionReviews(redis, getSubreddit());
-    return c.json<ModAnchorActionReviewsResponse>({ reviews });
+    const status = c.req.query('status')?.trim();
+    const actor = c.req.query('actor')?.trim().toLowerCase();
+    const dateFrom = c.req.query('dateFrom')?.trim();
+    const dateTo = c.req.query('dateTo')?.trim();
+    const shouldPaginate = Boolean(
+      status ||
+      actor ||
+      dateFrom ||
+      dateTo ||
+      c.req.query('limit') ||
+      c.req.query('cursor')
+    );
+    if (!shouldPaginate) {
+      const reviews = await getModAnchorActionReviews(redis, getSubreddit());
+      return c.json<ModAnchorActionReviewsResponse>({ reviews });
+    }
+    const page = await getModAnchorActionReviewsPage(redis, getSubreddit(), {
+      status,
+      actor,
+      dateFrom,
+      dateTo,
+      limit: parseLimit(c.req.query('limit'), 25, 100),
+      cursor: c.req.query('cursor') ?? undefined,
+    });
+    return c.json<PaginatedModAnchorActionReviewsResponse>({
+      items: page.items,
+      nextCursor: page.nextCursor,
+      hasMore: page.hasMore,
+      total: page.total,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load ModAnchor action reviews';
     return c.json<ApiErrorResponse>({ error: message }, 400);
@@ -1190,12 +1350,17 @@ api.get('/modonboard/my-action-reviews', async (c) => {
   }
   try {
     const actor = normalizeUsername(access.currentUsername).toLowerCase();
-    const reviews = await getModAnchorActionReviews(redis, getSubreddit());
-    const mine = reviews
-      .filter((r) => normalizeUsername(r.actorUsername).toLowerCase() === actor)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 20);
-    return c.json<MyActionReviewsResponse>({ reviews: mine });
+    const page = await getModAnchorActionReviewsPage(redis, getSubreddit(), {
+      actor,
+      limit: parseLimit(c.req.query('limit'), 20, 100),
+      cursor: c.req.query('cursor') ?? undefined,
+    });
+    return c.json<MyActionReviewsResponse & { nextCursor: string | null; hasMore: boolean; total: number }>({
+      reviews: page.items,
+      nextCursor: page.nextCursor,
+      hasMore: page.hasMore,
+      total: page.total,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load your action reviews';
     return c.json<ApiErrorResponse>({ error: message }, 400);
@@ -1299,10 +1464,10 @@ api.post('/modonboard/action-console/submit', async (c) => {
     const targetType = body.targetType;
     const targetUsername = normalizeUsername(body.targetUsername ?? '').trim();
     const targetId = typeof body.targetId === 'string' ? body.targetId.trim() : '';
-    const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
-    const modNote = typeof body.modNote === 'string' ? body.modNote.trim() : '';
+    const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, MAX_REASON_LENGTH) : '';
+    const modNote = typeof body.modNote === 'string' ? body.modNote.trim().slice(0, MAX_MOD_NOTE_LENGTH) : '';
     const targetActionMap: Record<'user' | 'post' | 'comment', Set<ModAnchorActionType>> = {
-      user: new Set(['ban_user', 'unban_user', 'add_mod_note']),
+      user: new Set(['ban_user', 'temp_ban_user', 'unban_user', 'mute_user', 'unmute_user', 'add_mod_note']),
       post: new Set(['approve_post', 'remove_post', 'remove_post_spam', 'lock_post', 'unlock_post']),
       comment: new Set(['approve_comment', 'remove_comment', 'remove_comment_spam', 'lock_comment', 'unlock_comment']),
     };
@@ -1535,7 +1700,45 @@ api.get('/modonboard/monitoring-digests', async (c) => {
   }
   try {
     const digests = await getMonitoringDigests(redis, getSubreddit());
-    return c.json<MonitoringDigestsResponse>({ digests });
+    const actor = c.req.query('actor')?.trim().toLowerCase();
+    const date = c.req.query('date')?.trim();
+    const dateFrom = c.req.query('dateFrom')?.trim();
+    const dateTo = c.req.query('dateTo')?.trim();
+    const status = c.req.query('status')?.trim();
+    const shouldPaginate = Boolean(
+      actor ||
+      date ||
+      dateFrom ||
+      dateTo ||
+      status ||
+      c.req.query('limit') ||
+      c.req.query('cursor')
+    );
+    if (!shouldPaginate) {
+      return c.json<MonitoringDigestsResponse>({ digests });
+    }
+    const limit = parseLimit(c.req.query('limit'), 25, 100);
+    const offset = parseOffsetCursor(c.req.query('cursor'));
+    const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`).getTime() : Number.NEGATIVE_INFINITY;
+    const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999Z`).getTime() : Number.POSITIVE_INFINITY;
+    const filtered = digests
+      .filter((digest) => !actor || normalizeUsername(digest.actorUsername).toLowerCase() === actor)
+      .filter((digest) => !date || digest.digestDate === date)
+      .filter((digest) => !status || digest.deliveryStatus === status)
+      .filter((digest) => {
+        const t = new Date(digest.digestDate).getTime();
+        if (!Number.isFinite(t)) return false;
+        return t >= fromMs && t <= toMs;
+      })
+      .sort((a, b) => new Date(b.digestDate).getTime() - new Date(a.digestDate).getTime());
+    const items = filtered.slice(offset, offset + limit);
+    const nextOffset = offset + items.length;
+    return c.json<PaginatedMonitoringDigestsResponse>({
+      items,
+      nextCursor: nextOffset < filtered.length ? String(nextOffset) : null,
+      hasMore: nextOffset < filtered.length,
+      total: filtered.length,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load monitoring digests';
     return c.json<ApiErrorResponse>({ error: message }, 400);
@@ -1568,7 +1771,30 @@ api.post('/modonboard/monitoring-digests/generate', async (c) => {
     });
     const updated = result.digests;
     await saveMonitoringDigests(redis, subreddit, updated);
-    return c.json<MonitoringDigestsResponse>({ digests: updated });
+    return c.json<MonitoringDigestsResponse & {
+      ok: boolean;
+      date: string;
+      processedActors: number;
+      skippedAlreadySent: number;
+      truncated: boolean;
+      scannedActions: number;
+      generated: number;
+      sent: number;
+      failed: number;
+      message: string;
+    }>({
+      digests: updated,
+      ok: true,
+      date: digestDateUtc,
+      processedActors: result.processedActors,
+      skippedAlreadySent: result.skippedAlreadySent,
+      truncated: result.truncated,
+      scannedActions: result.scannedActions,
+      generated: result.generated,
+      sent: result.sent,
+      failed: result.failed,
+      message: 'Daily digest generation completed.',
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to generate monitoring digests';
     return c.json<ApiErrorResponse>({ error: message }, 400);

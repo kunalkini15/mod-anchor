@@ -8,6 +8,7 @@ import type {
   ModOnboardReportResponse,
   ModeratorListResponse,
   ReportHistoryResponse,
+  PaginatedReportHistoryResponse,
   RuleGapReport,
   SeniorAccessPolicy,
   SeniorAccessPolicyResponse,
@@ -20,8 +21,10 @@ import type {
   ModAnchorActionType,
   ModAnchorTargetMetadata,
   ModAnchorActionReviewsResponse,
+  PaginatedModAnchorActionReviewsResponse,
   MyActionReviewsResponse,
   MonitoringDigestsResponse,
+  PaginatedMonitoringDigestsResponse,
   ModAnchorMonitoringDigest,
   StoredReport,
   SubredditModerator,
@@ -129,7 +132,10 @@ const formatActionLabel = (actionType: string) => {
     lock_comment: 'Locked comment',
     unlock_comment: 'Unlocked comment',
     ban_user: 'Ban user',
+    temp_ban_user: 'Temporary ban user',
     unban_user: 'Unban user',
+    mute_user: 'Mute user',
+    unmute_user: 'Unmute user',
     add_mod_note: 'Add mod note',
   };
   return labels[actionType] ?? actionType.replaceAll('_', ' ');
@@ -296,7 +302,7 @@ export const App = () => {
   const [phase2Hours, setPhase2Hours] = useState(0);
   const [phase2Minutes, setPhase2Minutes] = useState(0);
   const [autoGraduate, setAutoGraduate] = useState(false);
-  const [reportMode, setReportMode] = useState<'per_action' | 'daily_digest'>('per_action');
+  const [reportMode, setReportMode] = useState<'per_action' | 'daily_digest'>('daily_digest');
   const [reviewTargetUsername, setReviewTargetUsername] = useState('');
   const [modOnboardActionError, setModOnboardActionError] = useState<string | null>(null);
   const [modOnboardActionSuccess, setModOnboardActionSuccess] = useState<string | null>(null);
@@ -310,6 +316,7 @@ export const App = () => {
   const [modOnboardWorkspaceRefreshing, setModOnboardWorkspaceRefreshing] = useState(false);
   const [actionConsoleTargetUsername, setActionConsoleTargetUsername] = useState(savedActionConsoleState.userTarget ?? '');
   const [actionConsoleUserActionType, setActionConsoleUserActionType] = useState<ModAnchorActionType>(savedActionConsoleState.userActionType ?? 'ban_user');
+  const [actionConsoleUserDurationDays, setActionConsoleUserDurationDays] = useState(7);
   const [actionConsoleUserReason, setActionConsoleUserReason] = useState(savedActionConsoleState.userReason ?? '');
   const [actionConsoleUserModNote, setActionConsoleUserModNote] = useState(savedActionConsoleState.userModNote ?? '');
   const [actionConsolePostActionType, setActionConsolePostActionType] = useState<ModAnchorActionType>(savedActionConsoleState.postActionType ?? 'approve_post');
@@ -340,6 +347,8 @@ export const App = () => {
   const [actionConsolePreviewError, setActionConsolePreviewError] = useState<string | null>(null);
   const [expandedPostSnippets, setExpandedPostSnippets] = useState<Record<string, boolean>>({});
   const [showAllMyActions, setShowAllMyActions] = useState(false);
+  const [approvalsVisibleCount, setApprovalsVisibleCount] = useState(25);
+  const [monitoringVisibleCount, setMonitoringVisibleCount] = useState(25);
   const [toast, setToast] = useState<{ id: number; type: 'success' | 'error'; message: string } | null>(null);
   const [startReviewSubmitting, setStartReviewSubmitting] = useState(false);
   const [pendingDecisionAction, setPendingDecisionAction] = useState<{ id: string; decision: 'approve' | 'reject' } | null>(null);
@@ -415,6 +424,10 @@ export const App = () => {
   ]);
 
   const [history, setHistory] = useState<StoredReport[]>([]);
+  const [historyListMode, setHistoryListMode] = useState(false);
+  const [historyDetailById, setHistoryDetailById] = useState<Record<string, StoredReport>>({});
+  const [historyDetailLoadingById, setHistoryDetailLoadingById] = useState<Record<string, boolean>>({});
+  const [historyDetailErrorById, setHistoryDetailErrorById] = useState<Record<string, string>>({});
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyResetting, setHistoryResetting] = useState(false);
   const [historyResetConfirmOpen, setHistoryResetConfirmOpen] = useState(false);
@@ -423,6 +436,7 @@ export const App = () => {
   const [reportDeletingId, setReportDeletingId] = useState<string | null>(null);
   const [confirmDeleteReportId, setConfirmDeleteReportId] = useState<string | null>(null);
   const [expandedHistory, setExpandedHistory] = useState<Record<string, boolean>>({});
+  const [historyVisibleCount, setHistoryVisibleCount] = useState(20);
   const [recentlyGeneratedReportId, setRecentlyGeneratedReportId] = useState<string | null>(null);
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
     setToast({ id: Date.now(), type, message });
@@ -444,20 +458,109 @@ export const App = () => {
 
   const whoami = useMemo(() => context.username ?? 'moderator', []);
   const subreddit = useMemo(() => context.subredditName ?? 'modanchor_dev', []);
+  const pendingApprovalActions = useMemo(
+    () => actionReviews.filter((item) => item.executionStatus === 'pending_approval'),
+    [actionReviews]
+  );
+  const reviewedActions = useMemo(
+    () =>
+      actionReviews
+        .filter((item) => item.executionStatus === 'approved_executed' || item.executionStatus === 'rejected')
+        .slice(0, 6),
+    [actionReviews]
+  );
+  const monitoredActions = useMemo(
+    () => actionReviews.filter((item) => item.executionStatus === 'executed_monitored'),
+    [actionReviews]
+  );
+  const activeReviewAssignments = useMemo(
+    () => reviewAssignments.filter((assignment) => assignment.status === 'active'),
+    [reviewAssignments]
+  );
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch('/api/reports');
-      const data: ReportHistoryResponse = await res.json();
+      const res = await fetch('/api/reports?summaryOnly=true&limit=100');
+      const data: (PaginatedReportHistoryResponse & ReportHistoryResponse) = await res.json();
       if (!res.ok) throw new Error('Failed to fetch report history.');
-      setHistory(data.reports ?? []);
+      if ('items' in data && Array.isArray(data.items)) {
+        const listAsReports = data.items.map((item) => ({
+          id: item.id,
+          type: item.type,
+          summary: item.title,
+          generatedAt: item.generatedAt,
+          periodDays: item.periodDays ?? 0,
+          subreddit,
+          ...(item.type === 'modonboard'
+            ? {
+                username: item.username ?? 'unknown',
+                actionSummary: { removals: 0, approvals: 0, bans: 0, comments: 0 },
+                focusAreas: Array.from({ length: item.focusAreasCount ?? 0 }).map(() => ''),
+                recommendations: [],
+                metrics: item.metrics
+                  ? {
+                      totalActions: item.metrics.totalActions ?? 0,
+                      pendingApproval: 0,
+                      approvedExecuted: item.metrics.approvedExecuted ?? 0,
+                      rejected: item.metrics.rejected ?? 0,
+                      executedMonitored: item.metrics.executedMonitored ?? 0,
+                      executed: 0,
+                      failed: item.metrics.failed ?? 0,
+                    }
+                  : undefined,
+              }
+            : { issues: [] }),
+        })) as StoredReport[];
+        setHistoryListMode(true);
+        setHistory(listAsReports);
+      } else {
+        setHistoryListMode(false);
+        setHistory((data as ReportHistoryResponse).reports ?? []);
+      }
+      setHistoryVisibleCount(20);
     } catch (error) {
       console.error(error);
     } finally {
       setHistoryLoading(false);
     }
-  };
+  }, [subreddit]);
+  const ensureHistoryReportDetail = useCallback(async (reportId: string): Promise<void> => {
+    if (!reportId) return;
+    if (historyDetailById[reportId] || historyDetailLoadingById[reportId]) return;
+    setHistoryDetailLoadingById((prev) => ({ ...prev, [reportId]: true }));
+    try {
+      const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}`);
+      const data: { report?: StoredReport; error?: string } = await res.json();
+      if (res.ok && data.report) {
+        setHistoryDetailById((prev) => ({ ...prev, [reportId]: data.report as StoredReport }));
+        setHistoryDetailErrorById((prev) => {
+          const next = { ...prev };
+          delete next[reportId];
+          return next;
+        });
+      } else {
+        setHistoryDetailErrorById((prev) => ({ ...prev, [reportId]: data.error ?? 'Failed to load report details.' }));
+      }
+    } catch {
+      setHistoryDetailErrorById((prev) => ({ ...prev, [reportId]: 'Failed to load report details.' }));
+    } finally {
+      setHistoryDetailLoadingById((prev) => ({ ...prev, [reportId]: false }));
+    }
+  }, [historyDetailById, historyDetailLoadingById]);
+  useEffect(() => {
+    if (!historyListMode) return;
+    const expandedIds = Object.entries(expandedHistory)
+      .filter(([, isExpanded]) => isExpanded)
+      .map(([id]) => id);
+    for (const reportId of expandedIds) {
+      if (!historyDetailById[reportId] && !historyDetailLoadingById[reportId]) {
+        queueMicrotask(() => {
+          void ensureHistoryReportDetail(reportId);
+        });
+      }
+    }
+  }, [expandedHistory, historyListMode, historyDetailById, historyDetailLoadingById, ensureHistoryReportDetail]);
   const resetModAnchorData = async () => {
     if (historyResetting) return;
     setHistoryResetting(true);
@@ -468,6 +571,9 @@ export const App = () => {
       showSuccessToast(data.message ?? 'ModAnchor workspace data cleared.');
       setHistory([]);
       setExpandedHistory({});
+      setHistoryDetailById({});
+      setHistoryDetailLoadingById({});
+      setHistoryDetailErrorById({});
       setHistoryCopyStatus(null);
       await Promise.all([
         fetchHistory(),
@@ -486,6 +592,9 @@ export const App = () => {
       setHistoryResetConfirmOpen(false);
     }
   };
+
+  const toCountText = (value: number | undefined): string =>
+    typeof value === 'number' && Number.isFinite(value) ? String(value) : '—';
 
   const fetchModOnboardAccess = async () => {
     setModOnboardAccessLoading(true);
@@ -519,10 +628,23 @@ export const App = () => {
   };
 
   const fetchActionReviews = async () => {
-    const res = await fetch('/api/modonboard/action-reviews');
-    const data: (ModAnchorActionReviewsResponse & { error?: string }) = await res.json();
-    if (!res.ok) throw new Error(data.error ?? 'Failed to fetch ModAnchor action reviews.');
-    setActionReviews(data.reviews ?? []);
+    const pendingRes = await fetch('/api/modonboard/action-reviews?status=pending_approval&limit=100');
+    const pendingData: (PaginatedModAnchorActionReviewsResponse & ModAnchorActionReviewsResponse & { error?: string }) = await pendingRes.json();
+    if (!pendingRes.ok) throw new Error(pendingData.error ?? 'Failed to fetch pending action reviews.');
+    const monitoredRes = await fetch('/api/modonboard/action-reviews?status=executed_monitored&limit=100');
+    const monitoredData: (PaginatedModAnchorActionReviewsResponse & ModAnchorActionReviewsResponse & { error?: string }) = await monitoredRes.json();
+    if (!monitoredRes.ok) throw new Error(monitoredData.error ?? 'Failed to fetch monitored action reviews.');
+    const recentRes = await fetch('/api/modonboard/action-reviews?limit=100');
+    const recentData: (PaginatedModAnchorActionReviewsResponse & ModAnchorActionReviewsResponse & { error?: string }) = await recentRes.json();
+    if (!recentRes.ok) throw new Error(recentData.error ?? 'Failed to fetch recent action reviews.');
+    const pending = 'items' in pendingData ? pendingData.items : (pendingData as ModAnchorActionReviewsResponse).reviews ?? [];
+    const monitored = 'items' in monitoredData ? monitoredData.items : (monitoredData as ModAnchorActionReviewsResponse).reviews ?? [];
+    const recent = 'items' in recentData ? recentData.items : (recentData as ModAnchorActionReviewsResponse).reviews ?? [];
+    const deduped = new Map<string, import('../shared/api').ModAnchorActionReview>();
+    for (const item of [...pending, ...monitored, ...recent]) deduped.set(item.id, item);
+    setActionReviews(Array.from(deduped.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+    setApprovalsVisibleCount(25);
+    setMonitoringVisibleCount(25);
   };
   const fetchMyActionReviews = async () => {
     const res = await fetch('/api/modonboard/my-action-reviews');
@@ -531,10 +653,11 @@ export const App = () => {
     setMyActionReviews(data.reviews ?? []);
   };
   const fetchMonitoringDigests = async () => {
-    const res = await fetch('/api/modonboard/monitoring-digests');
-    const data: (MonitoringDigestsResponse & { error?: string }) = await res.json();
+    const res = await fetch('/api/modonboard/monitoring-digests?limit=100');
+    const data: (MonitoringDigestsResponse & PaginatedMonitoringDigestsResponse & { error?: string }) = await res.json();
     if (!res.ok) throw new Error(data.error ?? 'Failed to fetch monitoring digests.');
-    setMonitoringDigests(data.digests ?? []);
+    if ('items' in data && Array.isArray(data.items)) setMonitoringDigests(data.items);
+    else setMonitoringDigests((data as MonitoringDigestsResponse).digests ?? []);
   };
 
   const refreshModOnboardWorkspace = useCallback(async () => {
@@ -582,7 +705,7 @@ export const App = () => {
         void fetchHistory();
       });
     }
-  }, [tab, modOnboardAccess?.canViewReports]);
+  }, [tab, modOnboardAccess?.canViewReports, fetchHistory]);
 
   useEffect(() => {
     if (!modOnboardAccess?.canViewModOnboard) return;
@@ -693,6 +816,7 @@ export const App = () => {
       await Promise.all([fetchReviewAssignments(), fetchActionReviews(), fetchMonitoringDigests(), loadSubredditModerators()]);
       if (action === 'complete' && data.finalReportStatus === 'saved' && data.finalReportId) {
         await fetchHistory();
+        await ensureHistoryReportDetail(data.finalReportId);
         setExpandedHistory((prev) => ({ ...prev, [data.finalReportId as string]: true }));
         setRecentlyGeneratedReportId(data.finalReportId);
         setTab('history');
@@ -731,6 +855,26 @@ export const App = () => {
         throw new Error(data.error ?? 'Failed to delete report.');
       }
       setHistory(data.reports ?? []);
+      setHistoryDetailById((prev) => {
+        const next = { ...prev };
+        delete next[reportId];
+        return next;
+      });
+      setHistoryDetailLoadingById((prev) => {
+        const next = { ...prev };
+        delete next[reportId];
+        return next;
+      });
+      setHistoryDetailErrorById((prev) => {
+        const next = { ...prev };
+        delete next[reportId];
+        return next;
+      });
+      setExpandedHistory((prev) => {
+        const next = { ...prev };
+        delete next[reportId];
+        return next;
+      });
       setConfirmDeleteReportId(null);
       showSuccessToast('Report deleted.');
     } catch (error) {
@@ -755,6 +899,9 @@ export const App = () => {
       if (!res.ok) throw new Error(data.error ?? 'Failed to delete all reports.');
       setHistory(data.reports ?? []);
       setExpandedHistory({});
+      setHistoryDetailById({});
+      setHistoryDetailLoadingById({});
+      setHistoryDetailErrorById({});
       showSuccessToast('Report history cleared.');
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : 'Failed to delete all reports.');
@@ -849,8 +996,12 @@ export const App = () => {
       const data: ModOnboardReportResponse = await res.json();
       if (!res.ok) throw new Error('Failed to generate ModOnboard report.');
       setReviewReportsByUsername((prev) => ({ ...prev, [data.report.username.toLowerCase()]: data.report }));
+      if (data.report?.id) {
+        setHistoryDetailById((prev) => ({ ...prev, [data.report.id]: data.report }));
+      }
       await fetchHistory();
       if (data.report?.id) {
+        await ensureHistoryReportDetail(data.report.id);
         setExpandedHistory((prev) => ({ ...prev, [data.report.id]: true }));
         setRecentlyGeneratedReportId(data.report.id);
       }
@@ -1197,11 +1348,11 @@ export const App = () => {
             {modOnboardSection === 'overview' && modOnboardAccess?.canManageModOnboard && (
               <>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                  <button onClick={() => setModOnboardSection('approvals')} className={`flex min-h-[88px] flex-col justify-between rounded-lg border p-3 text-left ${actionReviews.filter((a) => a.executionStatus === 'pending_approval').length > 0 ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}><p className="text-xs leading-snug text-slate-500">Needs approval</p><p className="mt-2 text-lg font-semibold">{modOnboardWorkspaceRefreshing ? '—' : actionReviews.filter((a) => a.executionStatus === 'pending_approval').length}</p></button>
+                  <button onClick={() => setModOnboardSection('approvals')} className={`flex min-h-[88px] flex-col justify-between rounded-lg border p-3 text-left ${pendingApprovalActions.length > 0 ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}><p className="text-xs leading-snug text-slate-500">Needs approval</p><p className="mt-2 text-lg font-semibold">{modOnboardWorkspaceRefreshing ? '—' : pendingApprovalActions.length}</p></button>
                   <button onClick={() => setModOnboardSection('moderators')} className="flex min-h-[88px] flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-3 text-left"><p className="text-xs leading-snug text-slate-500">Ongoing reviews</p><p className="mt-2 text-lg font-semibold">{modOnboardWorkspaceRefreshing ? '—' : reviewAssignments.filter((a) => a.status === 'active').length}</p></button>
                   <div className="flex min-h-[88px] flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-xs leading-snug text-slate-500">Senior mods</p><p className="mt-2 text-lg font-semibold">{modOnboardWorkspaceRefreshing ? '—' : moderators.filter((m) => m.modAnchorRole === 'senior').length}</p></div>
                   <div className="flex min-h-[88px] flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-xs leading-snug text-slate-500">Moderators loaded</p><p className="mt-2 text-lg font-semibold">{moderatorsLoading || modOnboardWorkspaceRefreshing ? '—' : moderators.length || '—'}</p></div>
-                  <button onClick={() => setModOnboardSection('monitoring')} className="flex min-h-[88px] flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-3 text-left"><p className="text-xs leading-snug text-slate-500">Monitored actions</p><p className="mt-2 text-lg font-semibold">{modOnboardWorkspaceRefreshing ? '—' : actionReviews.filter((a) => a.executionStatus === 'executed_monitored').length}</p></button>
+                  <button onClick={() => setModOnboardSection('monitoring')} className="flex min-h-[88px] flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-3 text-left"><p className="text-xs leading-snug text-slate-500">Monitored actions</p><p className="mt-2 text-lg font-semibold">{modOnboardWorkspaceRefreshing ? '—' : monitoredActions.length}</p></button>
                   <button onClick={() => setModOnboardSection('monitoring')} className="flex min-h-[88px] flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-3 text-left"><p className="text-xs leading-snug text-slate-500">Daily digests</p><p className="mt-2 text-lg font-semibold">{modOnboardWorkspaceRefreshing ? '—' : monitoringDigests.length}</p></button>
                 </div>
                 <p className="text-xs text-slate-500">Start with actions that need approval, then review ongoing moderator progress.</p>
@@ -1334,6 +1485,9 @@ export const App = () => {
                   <p className="text-xs text-slate-500">Hours: 0-23 · Minutes: 0-59</p>
                   <label className="mt-2 block text-xs text-slate-600">Monitoring report style<select value={reportMode} onChange={(e) => setReportMode(e.target.value as 'per_action' | 'daily_digest')} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="per_action">Per action</option><option value="daily_digest">Daily digest</option></select></label>
                   <p className="mt-1 text-xs text-slate-500">Per action sends a modmail for each monitored ModAnchor action. Daily digest groups monitored actions into one summary per moderator per day.</p>
+                  {reportMode === 'per_action' && (
+                    <p className="mt-1 text-xs text-amber-700">Per-action modmail can be noisy in busy communities. Daily digest is recommended for high-volume subreddits.</p>
+                  )}
                   <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={autoGraduate} onChange={(e) => setAutoGraduate(e.target.checked)} /> Auto-graduate after review period</label>
                 </div>
               </div>
@@ -1351,7 +1505,7 @@ export const App = () => {
                     setPhase2Hours(0);
                     setPhase2Minutes(0);
                     setAutoGraduate(false);
-                    setReportMode('per_action');
+                    setReportMode('daily_digest');
                     setShowApprovalHelp(false);
                     setShowMonitoringHelp(false);
                   }}
@@ -1387,12 +1541,12 @@ export const App = () => {
                   )}
                 </div>
                 <h3 className="text-sm font-semibold text-slate-900">Actions waiting for senior approval</h3>
-                {actionReviews.filter((item) => item.executionStatus === 'pending_approval').length === 0 ? (
+                {pendingApprovalActions.length === 0 ? (
                   <p className="text-sm text-slate-600">No actions need approval right now. When a moderator in approval phase uses a ModAnchor menu action, it will appear here before execution.</p>
                 ) : (
                   <div className="space-y-2">
-                    {actionReviews
-                      .filter((item) => item.executionStatus === 'pending_approval')
+                    {pendingApprovalActions
+                      .slice(0, approvalsVisibleCount)
                       .map((item) => (
                         (() => {
                           const target = getTargetContext(item.targetType, item.targetId, item.metadata);
@@ -1441,17 +1595,24 @@ export const App = () => {
                         </div>
                       )})()
                       ))}
+                    {pendingApprovalActions.length > approvalsVisibleCount && (
+                      <button
+                        type="button"
+                        className="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700"
+                        onClick={() => setApprovalsVisibleCount((count) => count + 25)}
+                      >
+                        Load more approvals
+                      </button>
+                    )}
                   </div>
                 )}
                 <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm">
                   <p className="font-medium">Recently reviewed actions</p>
-                  {actionReviews.filter((item) => item.executionStatus === 'approved_executed' || item.executionStatus === 'rejected').length === 0 ? (
+                  {reviewedActions.length === 0 ? (
                     <p className="text-slate-600">No recently reviewed actions yet.</p>
                   ) : (
                     <ul className="mt-1 space-y-1 text-slate-600">
-                      {actionReviews
-                        .filter((item) => item.executionStatus === 'approved_executed' || item.executionStatus === 'rejected')
-                        .slice(0, 6)
+                      {reviewedActions
                         .map((item) => (
                           <li key={item.id}>
                             {formatDate(item.createdAt)} · {item.actionType.replaceAll('_', ' ')} · {item.executionStatus === 'approved_executed' ? 'Approved and ran' : 'Rejected'}
@@ -1534,16 +1695,32 @@ export const App = () => {
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Choose target</p>
                     <label className="block text-sm font-medium text-slate-700">Target username<input className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" placeholder="u/username" value={actionConsoleTargetUsername} onChange={(e) => setActionConsoleTargetUsername(e.target.value)} /></label>
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Choose action</p>
-                    <label className="block text-sm font-medium text-slate-700">Action<select className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" value={actionConsoleUserActionType} onChange={(e) => setActionConsoleUserActionType(e.target.value as ModAnchorActionType)}><option value="ban_user">Ban user</option><option value="unban_user">Unban user</option><option value="add_mod_note">Add mod note</option></select></label>
+                    <label className="block text-sm font-medium text-slate-700">Action<select className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" value={actionConsoleUserActionType} onChange={(e) => setActionConsoleUserActionType(e.target.value as ModAnchorActionType)}><option value="ban_user">Ban user</option><option value="temp_ban_user">Temporary ban user</option><option value="unban_user">Unban user</option><option value="mute_user">Mute user</option><option value="unmute_user">Unmute user</option><option value="add_mod_note">Add mod note</option></select></label>
+                    {actionConsoleUserActionType === 'temp_ban_user' && (
+                      <label className="block text-sm font-medium text-slate-700">Ban duration<select className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" value={String(actionConsoleUserDurationDays)} onChange={(e) => setActionConsoleUserDurationDays(Number(e.target.value))}><option value="3">3 days</option><option value="7">7 days</option><option value="28">28 days</option></select></label>
+                    )}
+                    {actionConsoleUserActionType === 'mute_user' && (
+                      <p className="rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600">Reddit controls mute duration for this action.</p>
+                    )}
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Details</p>
                     <label className="block text-sm font-medium text-slate-700">Internal reason (optional)<textarea className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" rows={2} value={actionConsoleUserReason} onChange={(e) => setActionConsoleUserReason(e.target.value)} /></label>
                     {actionConsoleUserActionType === 'add_mod_note' && <label className="block text-sm font-medium text-slate-700">Mod note<textarea className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" rows={2} value={actionConsoleUserModNote} onChange={(e) => setActionConsoleUserModNote(e.target.value)} /></label>}
                     <div className="flex items-center gap-2 pt-1">
                       <button type="button" className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60" disabled={actionConsoleSubmitting} onClick={async () => {
-                        const result = await submitActionConsole({ targetType: 'user', targetUsername: actionConsoleTargetUsername, actionType: actionConsoleUserActionType, reason: actionConsoleUserReason || undefined, modNote: actionConsoleUserActionType === 'add_mod_note' ? actionConsoleUserModNote || undefined : undefined });
+                        const result = await submitActionConsole({
+                          targetType: 'user',
+                          targetUsername: actionConsoleTargetUsername,
+                          actionType: actionConsoleUserActionType,
+                          reason: actionConsoleUserReason || undefined,
+                          modNote: actionConsoleUserActionType === 'add_mod_note' ? actionConsoleUserModNote || undefined : undefined,
+                          ...(actionConsoleUserActionType === 'temp_ban_user'
+                            ? { metadata: { durationDays: actionConsoleUserDurationDays, durationLabel: `${actionConsoleUserDurationDays} days` } }
+                            : {}),
+                        });
                         if (!result.ok) return;
                         setActionConsoleTargetUsername('');
                         setActionConsoleUserActionType('ban_user');
+                        setActionConsoleUserDurationDays(7);
                         setActionConsoleUserReason('');
                         setActionConsoleUserModNote('');
                       }}>{actionConsoleSubmitting ? 'Submitting...' : 'Submit user action'}</button>
@@ -1553,6 +1730,7 @@ export const App = () => {
                         onClick={() => {
                           setActionConsoleTargetUsername('');
                           setActionConsoleUserActionType('ban_user');
+                          setActionConsoleUserDurationDays(7);
                           setActionConsoleUserReason('');
                           setActionConsoleUserModNote('');
                         }}
@@ -1951,13 +2129,12 @@ export const App = () => {
             {modOnboardSection === 'monitoring' && modOnboardAccess?.canManageModOnboard && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
                 <h3 className="text-sm font-semibold text-slate-900">Recent monitored actions</h3>
-                {actionReviews.filter((item) => item.executionStatus === 'executed_monitored').length === 0 ? (
+                {monitoredActions.length === 0 ? (
                   <p className="text-sm text-slate-600">No monitored actions yet. When a moderator in monitoring phase uses a ModAnchor menu action, it will appear here after it runs.</p>
                 ) : (
                   <div className="space-y-2">
-                    {actionReviews
-                      .filter((item) => item.executionStatus === 'executed_monitored')
-                      .slice(0, 20)
+                    {monitoredActions
+                      .slice(0, monitoringVisibleCount)
                       .map((item) => (
                         (() => {
                           const target = getTargetContext(item.targetType, item.targetId, item.metadata);
@@ -1999,6 +2176,15 @@ export const App = () => {
                         </div>
                       )})()
                       ))}
+                    {monitoredActions.length > monitoringVisibleCount && (
+                      <button
+                        type="button"
+                        className="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700"
+                        onClick={() => setMonitoringVisibleCount((count) => count + 25)}
+                      >
+                        Load more monitored actions
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -2068,7 +2254,7 @@ export const App = () => {
                   <p className="text-xs text-slate-500">Start a review from the Start Review tab to onboard a new moderator.</p>
                 </div>
               )}
-              {reviewAssignments.filter((assignment) => assignment.status === 'active').map((assignment) => {
+              {activeReviewAssignments.map((assignment) => {
                 const reportForUser = reviewReportsByUsername[assignment.username.toLowerCase()];
                 return (
                 <div key={`${assignment.username}-${assignment.assignedAt}`} className="rounded-lg border border-slate-200 bg-white p-3 text-sm">
@@ -2119,6 +2305,9 @@ export const App = () => {
                         </select>
                       </label>
                       <p className="text-xs text-slate-500">Report style changes apply to future monitored actions only.</p>
+                      {editReviewReportMode === 'per_action' && (
+                        <p className="text-xs text-amber-700">Per-action modmail can be noisy in busy communities. Daily digest is recommended for high-volume subreddits.</p>
+                      )}
                       <label className="flex items-center gap-2 text-sm">
                         <input type="checkbox" checked={editReviewAutoGraduate} onChange={(e) => setEditReviewAutoGraduate(e.target.checked)} />
                         Auto-graduate after review period
@@ -2487,7 +2676,7 @@ export const App = () => {
               )}
             </div>
 
-            {history.map((report) => (
+            {history.slice(0, historyVisibleCount).map((report) => (
               <article key={report.id} className={`rounded-xl border p-3 text-sm ${recentlyGeneratedReportId === report.id ? 'border-blue-300 bg-blue-50/40' : 'border-slate-200 bg-slate-50'}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
@@ -2537,19 +2726,39 @@ export const App = () => {
                   <p className="mt-1 text-slate-600">Issue count: {report.issues.length}</p>
                 ) : (
                   <div className="mt-1 text-slate-600">
+                    {(() => {
+                      const headerReport = historyDetailById[report.id] ?? report;
+                      const metrics = headerReport.type === 'modonboard' ? headerReport.metrics : undefined;
+                      const focusCount =
+                        headerReport.type === 'modonboard'
+                          ? Array.isArray(headerReport.focusAreas)
+                            ? headerReport.focusAreas.length
+                            : undefined
+                          : undefined;
+                      return (
+                        <>
                     <p>Moderator: {normalizeUserDisplay(report.username)}</p>
-                    <p>Focus areas: {report.focusAreas.length}</p>
-                    <p>Total actions: {report.metrics?.totalActions ?? 0}</p>
-                    <p>Status: Approved {report.metrics?.approvedExecuted ?? 0} · Monitored {report.metrics?.executedMonitored ?? 0} · Rejected {report.metrics?.rejected ?? 0} · Failed {report.metrics?.failed ?? 0}</p>
+                    <p>Focus areas: {toCountText(focusCount)}</p>
+                    <p>Total actions: {toCountText(metrics?.totalActions)}</p>
+                    <p>Status: Approved {toCountText(metrics?.approvedExecuted)} · Monitored {toCountText(metrics?.executedMonitored)} · Rejected {toCountText(metrics?.rejected)} · Failed {toCountText(metrics?.failed)}</p>
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
 
                 <button
                   onClick={() =>
-                    setExpandedHistory((prev) => ({
-                      ...prev,
-                      [report.id]: !prev[report.id],
-                    }))
+                    void (async () => {
+                      const nextExpanded = !expandedHistory[report.id];
+                      if (nextExpanded && historyListMode && !historyDetailById[report.id]) {
+                        await ensureHistoryReportDetail(report.id);
+                      }
+                      setExpandedHistory((prev) => ({
+                        ...prev,
+                        [report.id]: nextExpanded,
+                      }));
+                    })()
                   }
                   className="mt-2 text-xs font-medium text-blue-700"
                 >
@@ -2558,14 +2767,34 @@ export const App = () => {
 
                 {expandedHistory[report.id] && (
                   <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-                    {report.type === 'rulegap' && report.sourceSummary && (
+                    {historyListMode && report.type === 'modonboard' && !historyDetailById[report.id] && historyDetailLoadingById[report.id] ? (
+                      <p className="text-xs text-slate-600">Loading report details…</p>
+                    ) : historyListMode && report.type === 'modonboard' && !historyDetailById[report.id] ? (
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-600">
+                          {historyDetailErrorById[report.id] ?? 'Could not load full report details yet.'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void ensureHistoryReportDetail(report.id)}
+                          className="rounded border border-slate-300 bg-slate-50 px-2 py-1 text-xs text-slate-700"
+                        >
+                          Retry loading details
+                        </button>
+                      </div>
+                    ) : (
+                    (() => {
+                      const fullReport = historyDetailById[report.id] ?? report;
+                      return (
+                        <>
+                    {fullReport.type === 'rulegap' && fullReport.sourceSummary && (
                       <p className="mb-2 text-xs text-slate-600">
-                        Visible actions: {report.sourceSummary.totalActions ?? 0} · Action types: {report.sourceSummary.actionTypes ?? 0} · Hidden platform actions: {report.sourceSummary.hiddenPlatformActions ?? 0} · Recent samples: {report.sourceSummary.recentSamples ?? 0}
+                        Visible actions: {fullReport.sourceSummary.totalActions ?? 0} · Action types: {fullReport.sourceSummary.actionTypes ?? 0} · Hidden platform actions: {fullReport.sourceSummary.hiddenPlatformActions ?? 0} · Recent samples: {fullReport.sourceSummary.recentSamples ?? 0}
                       </p>
                     )}
-                    {report.type === 'rulegap' ? (
+                    {fullReport.type === 'rulegap' ? (
                       <ul className="space-y-2">
-                        {report.issues.map((issue) => (
+                        {fullReport.issues.map((issue) => (
                           <li key={issue.id}>
                             <p className="font-medium text-slate-900">{issue.title}</p>
                             <p className="text-slate-600">Suggested wiki update: {issue.suggestedWikiUpdate}</p>
@@ -2577,21 +2806,21 @@ export const App = () => {
                         <div>
                           <p className="font-medium text-slate-900">Metrics</p>
                           <p className="text-slate-700 text-xs">
-                            Total: {report.metrics?.totalActions ?? 0} · Pending: {report.metrics?.pendingApproval ?? 0} · Approved: {report.metrics?.approvedExecuted ?? 0} · Monitored: {report.metrics?.executedMonitored ?? 0} · Rejected: {report.metrics?.rejected ?? 0} · Failed: {report.metrics?.failed ?? 0}
+                            Total: {fullReport.metrics?.totalActions ?? 0} · Pending: {fullReport.metrics?.pendingApproval ?? 0} · Approved: {fullReport.metrics?.approvedExecuted ?? 0} · Monitored: {fullReport.metrics?.executedMonitored ?? 0} · Rejected: {fullReport.metrics?.rejected ?? 0} · Failed: {fullReport.metrics?.failed ?? 0}
                           </p>
                         </div>
                         <div>
                           <p className="font-medium text-slate-900">Action breakdown</p>
                           <ul className="list-disc pl-5 text-slate-700">
-                            {summarizeActionBreakdown(report.actionCounts).map((row) => (
-                              <li key={`${report.id}-h-${row.label}`}>{row.label}: {row.count}</li>
+                            {summarizeActionBreakdown(fullReport.actionCounts).map((row) => (
+                              <li key={`${fullReport.id}-h-${row.label}`}>{row.label}: {row.count}</li>
                             ))}
                           </ul>
                         </div>
                         <div>
                           <p className="font-medium text-slate-900">Focus areas</p>
                           <ul className="list-disc pl-5 text-slate-700">
-                            {report.focusAreas.map((area, idx) => (
+                            {fullReport.focusAreas.map((area, idx) => (
                               <li key={idx}>{area}</li>
                             ))}
                           </ul>
@@ -2599,17 +2828,17 @@ export const App = () => {
                         <div>
                           <p className="font-medium text-slate-900">Recommendation titles</p>
                           <ul className="list-disc pl-5 text-slate-700">
-                            {report.recommendations.map((rec) => (
+                            {fullReport.recommendations.map((rec) => (
                               <li key={rec.id}>{rec.title}</li>
                             ))}
                           </ul>
                         </div>
                         <div>
                           <p className="font-medium text-slate-900">Recent actions</p>
-                          {report.recentActions?.length ? (
+                          {fullReport.recentActions?.length ? (
                             <ul className="list-disc pl-5 text-slate-700">
-                              {report.recentActions.slice(0, 10).map((a) => (
-                                <li key={`${report.id}-ra-${a.id}`}>
+                              {fullReport.recentActions.slice(0, 10).map((a) => (
+                                <li key={`${fullReport.id}-ra-${a.id}`}>
                                   {toUtcDateKey(a.createdAt)} UTC · {a.friendlyAction} · {a.friendlyStatus} · {a.targetType}
                                   {a.reason ? ` · Reason: ${a.reason}` : ''}
                                 </li>
@@ -2624,8 +2853,8 @@ export const App = () => {
                     <button
                       onClick={() =>
                         void (report.type === 'rulegap'
-                          ? copyText(buildRuleGapReportText(report))
-                          : copyText(buildModOnboardReportText(report)))
+                          ? copyText(buildRuleGapReportText(fullReport as Extract<StoredReport, { type: 'rulegap' }>))
+                          : copyText(buildModOnboardReportText(fullReport as Extract<StoredReport, { type: 'modonboard' }>)))
                           .then(() => setHistoryCopyStatus('Report copied.'))
                           .catch(() => setHistoryCopyStatus('Could not copy automatically. Please copy the report text manually.'))
                       }
@@ -2633,10 +2862,23 @@ export const App = () => {
                     >
                       Copy Report
                     </button>
+                        </>
+                      );
+                    })()
+                    )}
                   </div>
                 )}
               </article>
             ))}
+            {history.length > historyVisibleCount && (
+              <button
+                type="button"
+                className="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700"
+                onClick={() => setHistoryVisibleCount((count) => count + 20)}
+              >
+                Load more reports
+              </button>
+            )}
             {historyCopyStatus && <p className="text-xs text-slate-600">{historyCopyStatus}</p>}
 
             {!historyLoading && history.length === 0 && (

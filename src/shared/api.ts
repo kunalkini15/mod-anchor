@@ -222,6 +222,31 @@ export type ReportHistoryResponse = {
   reports: StoredReport[];
 };
 
+export type ReportHistoryListItem = {
+  id: string;
+  type: ReportType;
+  title: string;
+  username?: string;
+  generatedAt: ISODateString;
+  periodDays?: number;
+  actionCount?: number;
+  metrics?: {
+    totalActions?: number;
+    approvedExecuted?: number;
+    executedMonitored?: number;
+    rejected?: number;
+    failed?: number;
+  };
+  focusAreasCount?: number;
+};
+
+export type PaginatedReportHistoryResponse = {
+  items: ReportHistoryListItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number;
+};
+
 export type NewModConfigResponse = {
   newMods: NewModConfig[];
 };
@@ -338,7 +363,10 @@ export type ModAnchorActionType =
   | 'lock_comment'
   | 'unlock_comment'
   | 'ban_user'
+  | 'temp_ban_user'
   | 'unban_user'
+  | 'mute_user'
+  | 'unmute_user'
   | 'add_mod_note';
 
 export type ModAnchorActionExecutionStatus =
@@ -392,8 +420,18 @@ export interface ModAnchorActionReviewsResponse {
   reviews: ModAnchorActionReview[];
 }
 
+export interface PaginatedModAnchorActionReviewsResponse {
+  items: ModAnchorActionReview[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number;
+}
+
 export interface MyActionReviewsResponse {
   reviews: ModAnchorActionReview[];
+  nextCursor?: string | null;
+  hasMore?: boolean;
+  total?: number;
 }
 
 export interface SubmitUserActionRequest {
@@ -455,6 +493,13 @@ export interface ModAnchorMonitoringDigest {
 
 export interface MonitoringDigestsResponse {
   digests: ModAnchorMonitoringDigest[];
+}
+
+export interface PaginatedMonitoringDigestsResponse {
+  items: ModAnchorMonitoringDigest[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number;
 }
 
 export type ModerationActionSummary = {
