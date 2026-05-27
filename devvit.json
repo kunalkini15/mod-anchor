@@ -1,0 +1,68 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "modanchor",
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": {
+        "inline": true,
+        "entry": "splash.html"
+      },
+      "game": {
+        "entry": "game.html"
+      }
+    }
+  },
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Open ModAnchor Workspace",
+        "description": "Open ModAnchor workspace for moderator onboarding, review mode, and senior approval workflows.",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/open-modanchor-workspace"
+      },
+      {
+        "label": "ModAnchor: Moderate this post",
+        "description": "Run a post moderation action through ModAnchor Review Mode.",
+        "location": "post",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/modanchor-post-action"
+      },
+      {
+        "label": "ModAnchor: Moderate this comment",
+        "description": "Run a comment moderation action through ModAnchor Review Mode.",
+        "location": "comment",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/modanchor-comment-action"
+      }
+    ]
+  },
+  "forms": {
+    "exampleForm": "/internal/form/example-submit",
+    "modAnchorPostActionForm": "/internal/form/modanchor-post-action",
+    "modAnchorCommentActionForm": "/internal/form/modanchor-comment-action"
+  },
+  "triggers": {
+    "onAppInstall": "/internal/triggers/on-app-install"
+  },
+  "scheduler": {
+    "tasks": {
+      "modanchor-daily-digest": {
+        "endpoint": "/internal/scheduler/modanchor-daily-digest",
+        "cron": "0 0 * * *"
+      }
+    }
+  },
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build"
+  },
+  "dev": {
+    "subreddit": "modanchor_dev"
+  }
+}
