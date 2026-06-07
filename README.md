@@ -36,7 +36,7 @@ ModAnchor opens inside a custom post. The workspace post is locked and removed f
 
 ## How it works
 
-After installing the app head over to the Guide section which explains how the tool works.
+Read the full screenshot walkthrough here: [HOW_IT_WORKS.md](https://github.com/kunalkini15/mod-anchor/blob/main/HOW_IT_WORKS.md)
 
 1. Open ModAnchor from the subreddit menu.
 2. Launch the private workspace post.
