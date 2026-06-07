@@ -2,6 +2,8 @@
 
 ModAnchor is a private workspace for onboarding new Reddit moderators safely.
 
+Repository: https://github.com/kunalkini15/mod-anchor
+
 Senior mods can place a new moderator into **Review Mode**. During review, actions can either wait for approval first or run normally while still being monitored.
 
 It is not a replacement for Reddit’s mod tools. It is a review and coaching layer for mod teams.
