@@ -1,28 +1,26 @@
 # ModAnchor
 
-ModAnchor is a private Reddit moderation workspace for safely onboarding new moderators.
+ModAnchor is a private workspace for onboarding new Reddit moderators safely.
 
-It helps senior moderators place junior moderators into **Review Mode**, where supported moderation actions are either queued for approval or monitored after execution. The goal is simple: let new moderators learn through real workflows without giving them full trust on day one.
+Senior mods can place a new moderator into **Review Mode**. During review, actions can either wait for approval first or run normally while still being monitored.
+
+It is not a replacement for Reddit’s mod tools. It is a review and coaching layer for mod teams.
 
 ---
 
-## What it does
-
-ModAnchor gives moderation teams a structured onboarding flow:
+## What ModAnchor helps with
 
 - Start a review for a new moderator
-- Route actions through approval or monitoring
-- Let senior mods approve, reject, or review actions
-- Track user, post, and comment moderation actions
-- Send per-action updates or daily digest summaries
-- Generate review reports
-- Keep onboarding activity private from the public subreddit feed
-
-ModAnchor does not replace Reddit’s native moderation tools. It adds a review and coaching layer on top.
+- Queue actions for senior approval
+- Monitor actions after they happen
+- Review user, post, and comment actions
+- Send daily digest or per-action updates
+- Generate onboarding reports
+- Keep review activity private from the public subreddit feed
 
 ---
 
-## How to access ModAnchor
+## How to open ModAnchor
 
 After installing the app:
 
@@ -31,117 +29,85 @@ After installing the app:
 3. Select **Open ModAnchor Workspace**.
 4. Use the private ModAnchor workspace.
 
-ModAnchor uses a Devvit custom post as its workspace. The workspace post is automatically locked and removed from the public feed, so regular community members should not see it in the subreddit feed.
+ModAnchor opens inside a Devvit custom post. The workspace post is locked and removed from the public feed.
 
 ---
 
-## Main menu options
+## Review Flow
+
+### 1. Open from the subreddit menu
+
+![Open ModAnchor from the subreddit menu](./overview_screenshots/p1_mod_anchor_subreddit_menu.png)
+
+### 2. Launch the private workspace
+
+![ModAnchor workspace launch card](./overview_screenshots/p2_mod_anchor_post.png)
+
+### 3. Start Review Mode
+
+![Senior mod review setup](./overview_screenshots/p3_senior_mod_review_setup.png)
+
+### 4. Submit actions through Action Console
+
+![Junior mod user actions](./overview_screenshots/p4_junior_mod_user_actions.png)
+
+### 5. Handle post actions
+
+![Junior mod post actions](./overview_screenshots/p5_junior_mod_post_actions.png)
+
+### 6. Track review progress
+
+![Senior mod overview](./overview_screenshots/p6_senior_mod_overview.png)
+
+### 7. Approve or reject queued actions
+
+![Senior mod approval queue](./overview_screenshots/p7_senior_mod_approval.png)
+
+### 8. Review action history
+
+![User actions history](./overview_screenshots/p8_user_actions_history.png)
+
+---
+
+## Main tools
 
 ### ModOnboard
 
-The main senior moderator dashboard.
+The senior moderator dashboard.
 
-Use it to:
-
-- Start Review Mode
-- View onboarding status
-- Move moderators between review phases
-- Complete reviews
-- Generate reports
-- Track approval and monitoring activity
-
-### Start Review
-
-Start Review Mode for a moderator.
-
-You can configure:
-
-- Approval phase duration
-- Monitoring phase duration
-- Monitoring report style
-- Auto-graduation after review period
-
-Monitoring report styles:
-
-- **Daily digest**: groups monitored actions into one daily summary
-- **Per action**: sends a modmail update for each monitored action
-
-Daily digest is the recommended default for busy communities.
-
-### Approvals
-
-Shows actions submitted by moderators during the approval phase.
-
-Senior moderators can:
-
-- Review the action
-- Check the target and reason
-- Approve and run the action
-- Reject the action
-
-### Monitoring
-
-Shows actions that were executed through ModAnchor during the monitoring phase.
-
-This helps senior moderators review decisions after they happen.
+Use it to start reviews, check progress, move moderators between phases, complete reviews, and generate reports.
 
 ### Action Console
 
-The main workspace for submitting moderation actions through ModAnchor.
+The place where moderators submit actions through ModAnchor.
 
-Supported areas:
+Supported actions include:
 
-**User actions**
-
-- Ban user
-- Unban user
+- Ban or unban user
 - Add mod note
-- Mute / unmute user, if supported by the current build
+- Mute or unmute user
+- Approve, remove, spam, lock, or unlock posts
+- Approve, remove, spam, lock, or unlock comments
 
-**Post actions**
+Moderators can select recent posts/comments or paste a Reddit URL or ID manually.
 
-- Approve post
-- Remove post
-- Remove as spam
-- Lock / unlock post
+### Approvals
 
-**Comment actions**
+Actions submitted during the approval phase appear here.
 
-- Approve comment
-- Remove comment
-- Remove as spam
-- Lock / unlock comment
+Senior mods can review the target, reason, and action before approving or rejecting it.
 
-Moderators can select recent posts/comments or paste a Reddit ID/URL manually.
+### Monitoring
 
-### Moderators
+Actions submitted during the monitoring phase run immediately, but they are still recorded for review.
 
-Shows moderators currently in review and their progress.
-
-Senior moderators can:
-
-- Move a review to the next phase
-- Complete a review
-- Edit review setup
-- Generate a report
+Senior mods can check them later from the Monitoring tab, daily digest, or reports.
 
 ### Report History
 
-Stores generated ModAnchor reports.
+Generated reports are saved here.
 
-Reports can be:
-
-- Viewed
-- Expanded
-- Copied
-- Deleted individually
-- Deleted all at once
-
-Reports summarize review activity, action counts, recent decisions, and coaching notes.
-
-### Guide
-
-A short in-app guide for senior and junior moderators.
+Reports summarize review activity, recent actions, action counts, and coaching notes.
 
 ---
 
@@ -149,66 +115,40 @@ A short in-app guide for senior and junior moderators.
 
 Review Mode has two phases.
 
-### 1. Approval phase
+### Approval phase
 
-Junior moderator actions do not run immediately.
+The junior moderator’s actions do not run immediately.
 
-They are queued for senior review. A senior moderator can approve and execute the action, or reject it.
+They wait for a senior mod to approve or reject them.
 
-### 2. Monitoring phase
+### Monitoring phase
 
-Junior moderator actions run through ModAnchor immediately, but they are still recorded for review.
+The junior moderator’s actions run through ModAnchor immediately.
 
-Senior moderators can review activity through the Monitoring tab, per-action notifications, daily digests, and reports.
+Senior mods can still review what happened afterward.
 
 ---
 
-## Senior and junior access
+## Access
 
-Senior moderators can access the full ModAnchor workspace.
+Senior moderators get the full workspace.
 
-Junior moderators in active review get a restricted view focused on:
+Moderators in active review get a smaller view focused on:
 
 - Action Console
 - Guide
-
-Once a review is completed, access follows the configured graduation/review logic.
 
 Non-moderators should not be able to use the workspace.
 
 ---
 
-## Permissions
+## Permissions and limits
 
 ModAnchor works with Reddit’s existing moderator permissions.
 
-A junior moderator does not need full native moderation access to use Action Console. This makes ModAnchor useful for safer onboarding.
+A junior moderator does not need full native moderation access to use Action Console.
 
-There are two common setups:
-
-### Minimal-permission onboarding
-
-Best for cautious onboarding.
-
-- Junior moderators use Action Console
-- Senior moderators approve or monitor actions
-- Native post/comment menus may not be available to the junior moderator
-
-### Menu-action onboarding
-
-Best for a more contextual workflow.
-
-- Junior moderator has Posts & Comments permission
-- ModAnchor actions can appear closer to Reddit post/comment workflows
-- Native Reddit actions may still be available
-
----
-
-## Important limitations
-
-ModAnchor does not block native Reddit moderation actions.
-
-If a moderator has native Reddit permissions, they may still act directly through Reddit. ModAnchor can track and report native activity where available, but it cannot fully prevent native actions.
+Important limitation: ModAnchor does not block Reddit’s native moderation tools. If a moderator already has native Reddit permissions, they may still be able to act directly through Reddit.
 
 ModAnchor also does not:
 
@@ -220,25 +160,7 @@ ModAnchor also does not:
 
 ---
 
-## High-volume support
-
-ModAnchor includes safeguards for busier communities:
-
-- Bounded review queues
-- Indexed action-review storage
-- Paginated action review APIs
-- Daily digest mode
-- Digest size limits
-- Duplicate-safe digest generation
-- Report history loading designed to avoid unnecessary heavy detail loading
-
-Daily digest is recommended for high-volume subreddits.
-
----
-
-## Local checks
-
-Before release, run:
+## Local development
 
 ```bash
 npm run type-check
@@ -251,11 +173,3 @@ For playtesting:
 ```bash
 npx devvit playtest <subreddit_name>
 ```
-
----
-
-## Summary
-
-ModAnchor helps moderation teams onboard new moderators with more structure, visibility, and safety.
-
-It gives junior moderators real workflows, while senior moderators keep control through approvals, monitoring, daily digests, and review reports.

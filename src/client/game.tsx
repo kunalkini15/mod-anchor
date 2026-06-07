@@ -596,6 +596,73 @@ export const App = () => {
   const toCountText = (value: number | undefined): string =>
     typeof value === 'number' && Number.isFinite(value) ? String(value) : '—';
 
+  const guideScreenshots = [
+    {
+      src: './overview_screenshots/p1_mod_anchor_subreddit_menu.png',
+      step: 'Step 1',
+      title: 'Open from the subreddit menu',
+      caption: 'One click opens the private ModAnchor workspace from the subreddit menu.',
+    },
+    {
+      src: './overview_screenshots/p2_mod_anchor_post.png',
+      step: 'Step 2',
+      title: 'Launch the workspace',
+      caption: 'The workspace post acts as the private entry point into ModAnchor.',
+    },
+    {
+      src: './overview_screenshots/p3_senior_mod_review_setup.png',
+      step: 'Step 3',
+      title: 'Set up Review Mode',
+      caption: 'Senior moderators configure approval and monitoring phases before onboarding starts.',
+    },
+    {
+      src: './overview_screenshots/p4_junior_mod_user_actions.png',
+      step: 'Step 4',
+      title: 'Junior user actions',
+      caption: 'Junior moderators can submit user actions through Action Console while under review.',
+    },
+    {
+      src: './overview_screenshots/p5_junior_mod_post_actions.png',
+      step: 'Step 5',
+      title: 'Junior post actions',
+      caption: 'Post actions follow the same reviewed workflow for safer onboarding.',
+    },
+    {
+      src: './overview_screenshots/p6_senior_mod_overview.png',
+      step: 'Step 6',
+      title: 'Senior overview',
+      caption: 'Senior moderators track who is in review, what phase they are in, and what needs attention.',
+    },
+    {
+      src: './overview_screenshots/p7_senior_mod_approval.png',
+      step: 'Step 7',
+      title: 'Approval queue',
+      caption: 'Senior moderators approve, reject, or execute queued actions during the approval phase.',
+    },
+    {
+      src: './overview_screenshots/p8_user_actions_history.png',
+      step: 'Step 8',
+      title: 'Action history',
+      caption: 'Submitted actions stay visible in history so the team can review them later.',
+    },
+  ] as const;
+  const guideScreenshotSteps = modOnboardAccess?.canManageModOnboard
+    ? guideScreenshots
+    : guideScreenshots.filter((item) => ['Step 1', 'Step 2', 'Step 4', 'Step 5'].includes(item.step));
+  const isSeniorMod = Boolean(modOnboardAccess?.canManageModOnboard);
+  const guideIntro = isSeniorMod
+    ? 'This guide is for senior moderators. It shows how to start Review Mode, approve or monitor junior actions, and close out onboarding.'
+    : 'This guide is for junior moderators. It shows how to open ModAnchor, submit reviewed actions, and follow the onboarding flow while your account is under review.';
+  const guideWhatIsModAnchor = isSeniorMod
+    ? 'ModAnchor is a moderation onboarding workspace for senior moderators to review junior moderator actions, coach through failures, and decide when a moderator is ready to graduate.'
+    : 'ModAnchor is your review workspace for learning subreddit moderation with senior oversight and action tracking.';
+  const guideWorkflowIntro = isSeniorMod
+    ? 'Use these steps to set up and manage onboarding for a junior moderator.'
+    : 'Use these steps to work through your onboarding and keep your actions in the reviewed workflow.';
+  const reportHistoryIntro = isSeniorMod
+    ? 'Review the reports generated for your onboarding program and use them to coach junior moderators.'
+    : 'Review the reports generated for your own onboarding history.';
+
   const fetchModOnboardAccess = async () => {
     setModOnboardAccessLoading(true);
     setModOnboardAccessError(null);
@@ -1263,7 +1330,9 @@ export const App = () => {
           </div>
           <h1 className="mt-2 text-2xl font-semibold">ModAnchor</h1>
           <p className="mt-1 text-sm text-slate-600">
-            ModAnchor helps senior moderators onboard new mods with Review Mode, approval workflows, monitored actions, and review reports.
+            {isSeniorMod
+              ? 'ModAnchor helps senior moderators onboard new mods with Review Mode, approvals, monitored actions, and review reports.'
+              : 'ModAnchor helps junior moderators learn moderation through a reviewed workflow with senior oversight.'}
           </p>
           <p className="mt-2 text-xs text-slate-500">
             {normalizeUserDisplay(whoami)} · {normalizeSubredditDisplay(subreddit)}
@@ -1315,13 +1384,25 @@ export const App = () => {
             {modOnboardActionSuccess && <p className="text-sm text-slate-700">{modOnboardActionSuccess}</p>}
             {modOnboardActionError && <p className="text-sm text-slate-700">{modOnboardActionError}</p>}
             {modOnboardAccess && modOnboardAccess.canViewModOnboard && !modOnboardAccess.canManageModOnboard && (
-              <p className="text-xs text-slate-600">You can view ModOnboard, but only senior moderators can change review settings.</p>
+              <p className="text-xs text-slate-600">You can use Action Console and the Guide while your review is active. Senior moderators manage approvals, monitoring, and review settings.</p>
             )}
             <div className="space-y-1">
               <h2 className="text-lg font-semibold text-slate-900">ModOnboard</h2>
-              <p className="text-sm text-slate-600">Safely train new moderators with Review Mode. Senior mods can approve sensitive ModAnchor actions, monitor actions, and review progress until a moderator is ready.</p>
-              <p className="text-xs text-slate-500">Senior moderators can manage full ModOnboard. Junior moderators can use Action Console and Guide.</p>
-              <p className="text-xs text-slate-500">Use the sections below to start reviews, approve queued actions, monitor activity, and manage moderator access.</p>
+              <p className="text-sm text-slate-600">
+                {isSeniorMod
+                  ? 'Use ModOnboard to start reviews, approve sensitive actions, monitor activity, and coach junior moderators through graduation.'
+                  : 'Use ModOnboard to submit reviewed actions through Action Console and follow the guidance for your current review stage.'}
+              </p>
+              <p className="text-xs text-slate-500">
+                {isSeniorMod
+                  ? 'Senior moderators can manage review setup, approvals, monitoring, and reports.'
+                  : 'Junior moderators can use Action Console and Guide while their review is active.'}
+              </p>
+              <p className="text-xs text-slate-500">
+                {isSeniorMod
+                  ? 'Use the sections below to start reviews, approve queued actions, monitor activity, and manage moderator access.'
+                  : 'Use Action Console to submit reviewed moderation actions and the Guide to follow the onboarding flow.'}
+              </p>
             </div>
             <div className="flex flex-wrap gap-1.5">
               {(modOnboardAccess?.canManageModOnboard
@@ -1368,7 +1449,7 @@ export const App = () => {
             {modOnboardSection === 'start_review' && modOnboardAccess?.canManageModOnboard && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
               <h3 className="text-sm font-semibold text-slate-900">Start a moderator review</h3>
-              <p className="text-xs text-slate-600">Use this page to place a moderator into Review Mode. Approval phase queues ModAnchor actions for senior approval. Monitoring phase records actions after they run.</p>
+              <p className="text-xs text-slate-600">Use this page to place a junior moderator into Review Mode. Approval phase queues ModAnchor actions for senior approval. Monitoring phase records actions after they run.</p>
               <p className="text-xs text-slate-600">
                 {reviewTargetUsername
                   ? `Selected moderator: ${normalizeUserDisplay(reviewTargetUsername)}`
@@ -1446,7 +1527,7 @@ export const App = () => {
                       <input type="number" min={0} max={59} value={phase1Minutes} onChange={(e) => setPhase1Minutes(Math.min(59, Math.max(0, Number(e.target.value) || 0)))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Minutes" />
                     </label>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">Actions are queued for senior approval during this duration.</p>
+                  <p className="mt-1 text-xs text-slate-500">Actions from the junior moderator stay queued for senior approval during this duration.</p>
                   <p className="text-xs text-slate-500">Hours: 0-23 · Minutes: 0-59</p>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
@@ -1464,7 +1545,7 @@ export const App = () => {
                   </div>
                   {showMonitoringHelp && (
                     <div className="mt-2 space-y-1 text-xs text-slate-600">
-                      <p>During the monitoring phase, ModAnchor menu actions run immediately and are recorded for senior review.</p>
+                      <p>During the monitoring phase, the junior moderator’s ModAnchor actions run immediately and are recorded for senior review.</p>
                     </div>
                   )}
                   <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -1481,7 +1562,7 @@ export const App = () => {
                       <input type="number" min={0} max={59} value={phase2Minutes} onChange={(e) => setPhase2Minutes(Math.min(59, Math.max(0, Number(e.target.value) || 0)))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Minutes" />
                     </label>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">Actions can run through ModAnchor and are reviewed after they run.</p>
+                  <p className="mt-1 text-xs text-slate-500">The junior moderator’s actions can run through ModAnchor and are reviewed after they run.</p>
                   <p className="text-xs text-slate-500">Hours: 0-23 · Minutes: 0-59</p>
                   <label className="mt-2 block text-xs text-slate-600">Monitoring report style<select value={reportMode} onChange={(e) => setReportMode(e.target.value as 'per_action' | 'daily_digest')} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="per_action">Per action</option><option value="daily_digest">Daily digest</option></select></label>
                   <p className="mt-1 text-xs text-slate-500">Per action sends a modmail for each monitored ModAnchor action. Daily digest groups monitored actions into one summary per moderator per day.</p>
@@ -1523,7 +1604,7 @@ export const App = () => {
             {modOnboardSection === 'approvals' && modOnboardAccess?.canManageModOnboard && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
                 <h3 className="text-sm font-semibold text-slate-900">Approvals</h3>
-                <p className="text-sm text-slate-600">Use this page to review ModAnchor actions requested by moderators in the Approval phase. These actions have not run yet. A senior moderator can approve and run them, or reject them.</p>
+                <p className="text-sm text-slate-600">Use this page to review ModAnchor actions requested by junior moderators in the Approval phase. These actions have not run yet. As a senior moderator, you can approve and run them, or reject them.</p>
                 <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm">
                   <p className="font-medium">Moderators in Approval phase</p>
                   {reviewAssignments.filter((a) => a.status === 'active' && a.phase === 'approval_required').length === 0 ? (
@@ -1630,7 +1711,7 @@ export const App = () => {
             {modOnboardSection === 'monitoring' && modOnboardAccess?.canManageModOnboard && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
                 <h3 className="text-sm font-semibold text-slate-900">Monitoring</h3>
-                <p className="text-sm text-slate-600">Use this page to review actions taken by moderators in the Monitoring phase. Their ModAnchor actions run immediately and are recorded here for senior review.</p>
+                <p className="text-sm text-slate-600">Use this page to review actions taken by junior moderators in the Monitoring phase. Their ModAnchor actions run immediately and are recorded here for senior review.</p>
                 <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm">
                   <p className="font-medium">Moderators in Monitoring phase</p>
                   {reviewAssignments.filter((a) => a.status === 'active' && a.phase === 'monitored_actions').length > 0 ? (
@@ -1662,9 +1743,15 @@ export const App = () => {
               <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
                 <div className="space-y-1">
                   <h3 className="text-base font-semibold text-slate-900">Action Console</h3>
-                  <p className="text-sm text-slate-600">Submit moderation actions through ModAnchor Review Mode.</p>
+                  <p className="text-sm text-slate-600">
+                    {isSeniorMod
+                      ? 'Use Action Console to test and review moderation actions the same way a junior moderator would submit them.'
+                      : 'Use Action Console to submit moderation actions through ModAnchor Review Mode while your account is under review.'}
+                  </p>
                   <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    Only actions submitted through ModAnchor are routed through Review Mode. Native Reddit actions are tracked separately where possible.
+                    {isSeniorMod
+                      ? 'Actions submitted through ModAnchor are routed through Review Mode, even when you are using the workspace as a senior moderator.'
+                      : 'Only actions submitted through ModAnchor are routed through Review Mode. Native Reddit actions are tracked separately where possible.'}
                   </div>
                 </div>
                 <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -2537,10 +2624,10 @@ export const App = () => {
             {modOnboardSection === 'settings' && modOnboardAccess?.canManageModOnboard && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
               <p className="font-semibold text-slate-800">How Review Mode works</p>
-              <p>Approval phase: actions through ModAnchor are queued for senior approval before they run.</p>
-              <p>Monitoring phase: actions through ModAnchor run immediately and are recorded for review.</p>
+              <p>Approval phase: junior moderator actions through ModAnchor are queued for your approval before they run.</p>
+              <p>Monitoring phase: junior moderator actions through ModAnchor run immediately and are recorded for your review.</p>
               <p>Outside ModAnchor: Reddit actions cannot be blocked here. They can only be analyzed later from mod logs where available.</p>
-              <p>Posts & Comments permission is optional. It is recommended when you want junior mods to use ModAnchor post/comment menu actions directly.</p>
+              <p>Posts & Comments permission is optional. It is recommended when you want junior moderators to use ModAnchor post/comment menu actions directly.</p>
             </div>
             )}
               </>
@@ -2555,27 +2642,51 @@ export const App = () => {
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-1">
               <h3 className="text-base font-semibold text-slate-900">ModAnchor Guide</h3>
               <p className="text-sm text-slate-700">
-                {modOnboardAccess?.canManageModOnboard
-                  ? 'ModAnchor helps senior moderators onboard new moderators safely through Review Mode, action approvals, monitored actions, and review reports.'
-                  : 'ModAnchor helps you learn subreddit moderation with senior moderator review.'}
+                {guideIntro}
               </p>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+              <p className="text-sm font-semibold text-slate-900">How it works</p>
+              <div className="space-y-3">
+                {guideScreenshotSteps.map((item) => (
+                  <figure key={item.src} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+                      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">{item.step}</p>
+                      <p className="text-base font-semibold text-slate-900">{item.title}</p>
+                    </div>
+                    <div className="bg-slate-100">
+                      <img
+                        src={item.src}
+                        alt={`${item.step}: ${item.title}`}
+                        className="block w-full object-cover opacity-85 blur-[0.6px] contrast-95 saturate-90"
+                        loading="lazy"
+                      />
+                    </div>
+                    <figcaption className="p-3">
+                      <p className="text-sm text-slate-600">{item.caption}</p>
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
               <p className="text-sm font-semibold text-slate-900">What is ModAnchor?</p>
-              <p className="text-xs text-slate-700">ModAnchor is a moderation onboarding workspace designed for senior moderators training junior moderators through reviewed workflows.</p>
+              <p className="text-xs text-slate-700">{guideWhatIsModAnchor}</p>
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
               <p className="text-sm font-semibold text-slate-900">Review Mode phases</p>
-              <p className="text-xs text-slate-700"><span className="font-medium">Strict / Approval:</span> actions are queued and require senior approval.</p>
-              <p className="text-xs text-slate-700"><span className="font-medium">Monitored / Lenient:</span> actions can run immediately through ModAnchor and are reviewed after execution.</p>
-              <p className="text-xs text-slate-700"><span className="font-medium">Graduation:</span> senior moderators review reports and complete onboarding when ready.</p>
+              <p className="text-xs text-slate-700"><span className="font-medium">Strict / Approval:</span> {isSeniorMod ? 'junior moderator actions are queued and need your approval before they run.' : 'your actions are queued and need senior approval before they run.'}</p>
+              <p className="text-xs text-slate-700"><span className="font-medium">Monitored / Lenient:</span> {isSeniorMod ? 'junior moderator actions can run immediately and are reviewed after execution.' : 'your actions can run immediately and are reviewed after execution.'}</p>
+              <p className="text-xs text-slate-700"><span className="font-medium">Graduation:</span> {isSeniorMod ? 'you review reports and decide when a junior moderator is ready to graduate.' : 'senior moderators review your reports and decide when you are ready to graduate.'}</p>
             </div>
 
             {modOnboardAccess?.canManageModOnboard ? (
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
                 <p className="text-sm font-semibold text-slate-900">Senior moderator workflow</p>
+                <p className="text-xs text-slate-600">{guideWorkflowIntro}</p>
                 <ol className="list-decimal pl-5 text-xs text-slate-700 space-y-1">
                   <li>Grant permissions needed for the current onboarding phase.</li>
                   <li>In private subreddits, ensure the junior moderator is an approved user so they can open ModAnchor.</li>
@@ -2591,6 +2702,7 @@ export const App = () => {
             ) : (
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
                 <p className="text-sm font-semibold text-slate-900">Junior moderator workflow</p>
+                <p className="text-xs text-slate-600">{guideWorkflowIntro}</p>
                 <ol className="list-decimal pl-5 text-xs text-slate-700 space-y-1">
                   <li>Open ModAnchor from subreddit workspace/menu.</li>
                   <li>Use Action Console for supported actions.</li>
@@ -2612,7 +2724,7 @@ export const App = () => {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h3 className="text-base font-semibold">Report History</h3>
-                <p className="text-sm text-slate-600">Review previously generated ModAnchor reports.</p>
+                <p className="text-sm text-slate-600">{reportHistoryIntro}</p>
               </div>
               <button
                 onClick={() => void fetchHistory()}
@@ -2680,7 +2792,7 @@ export const App = () => {
               <article key={report.id} className={`rounded-xl border p-3 text-sm ${recentlyGeneratedReportId === report.id ? 'border-blue-300 bg-blue-50/40' : 'border-slate-200 bg-slate-50'}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
-                    {report.type === 'rulegap' ? 'RuleGap' : 'ModOnboard'}
+                  {report.type === 'rulegap' ? 'RuleGap' : isSeniorMod ? 'Senior ModOnboard' : 'Junior ModOnboard'}
                   </span>
                   <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs text-slate-700">
                     {report.periodDays} days
@@ -2883,7 +2995,9 @@ export const App = () => {
 
             {!historyLoading && history.length === 0 && (
               <p className="text-sm text-slate-500">
-                No reports yet. Generate a ModOnboard report to start building history.
+                {isSeniorMod
+                  ? 'No reports yet. Generate a ModOnboard report to start building senior review history.'
+                  : 'No reports yet. Your onboarding reports will appear here after they are generated.'}
               </p>
             )}
           </section>
