@@ -29,43 +29,21 @@ After installing the app:
 3. Select **Open ModAnchor Workspace**.
 4. Use the private ModAnchor workspace.
 
-ModAnchor opens inside a Devvit custom post. The workspace post is locked and removed from the public feed.
-
+ModAnchor opens inside a custom post. The workspace post is locked and removed from the public feed and is only visible to the moderators.  
 ---
 
-## Review Flow
+## How it works
 
-### 1. Open from the subreddit menu
+After installing the app head over to the Guide section which explains how the tool works.
 
-![Open ModAnchor from the subreddit menu](./overview_screenshots/p1_mod_anchor_subreddit_menu.png)
-
-### 2. Launch the private workspace
-
-![ModAnchor workspace launch card](./overview_screenshots/p2_mod_anchor_post.png)
-
-### 3. Start Review Mode
-
-![Senior mod review setup](./overview_screenshots/p3_senior_mod_review_setup.png)
-
-### 4. Submit actions through Action Console
-
-![Junior mod user actions](./overview_screenshots/p4_junior_mod_user_actions.png)
-
-### 5. Handle post actions
-
-![Junior mod post actions](./overview_screenshots/p5_junior_mod_post_actions.png)
-
-### 6. Track review progress
-
-![Senior mod overview](./overview_screenshots/p6_senior_mod_overview.png)
-
-### 7. Approve or reject queued actions
-
-![Senior mod approval queue](./overview_screenshots/p7_senior_mod_approval.png)
-
-### 8. Review action history
-
-![User actions history](./overview_screenshots/p8_user_actions_history.png)
+1. Open ModAnchor from the subreddit menu.
+2. Launch the private workspace post.
+3. Start Review Mode as a senior moderator.
+4. Junior moderators submit user actions through Action Console.
+5. Junior moderators submit post actions through the same reviewed workflow.
+6. Senior moderators track review progress.
+7. Senior moderators approve or reject queued actions.
+8. Review action history and reports.
 
 ---
 
@@ -159,17 +137,3 @@ ModAnchor also does not:
 - Use LLMs in the current MVP
 
 ---
-
-## Local development
-
-```bash
-npm run type-check
-npm run lint
-npm run build
-````
-
-For playtesting:
-
-```bash
-npx devvit playtest <subreddit_name>
-```

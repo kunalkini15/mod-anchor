@@ -646,9 +646,7 @@ export const App = () => {
       caption: 'Submitted actions stay visible in history so the team can review them later.',
     },
   ] as const;
-  const guideScreenshotSteps = modOnboardAccess?.canManageModOnboard
-    ? guideScreenshots
-    : guideScreenshots.filter((item) => ['Step 1', 'Step 2', 'Step 4', 'Step 5'].includes(item.step));
+
   const isSeniorMod = Boolean(modOnboardAccess?.canManageModOnboard);
   const guideIntro = isSeniorMod
     ? 'This guide is for senior moderators. It shows how to start Review Mode, approve or monitor junior actions, and close out onboarding.'
@@ -2649,7 +2647,7 @@ export const App = () => {
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
               <p className="text-sm font-semibold text-slate-900">How it works</p>
               <div className="space-y-3">
-                {guideScreenshotSteps.map((item) => (
+                {guideScreenshots.map((item) => (
                   <figure key={item.src} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
                     <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">{item.step}</p>
